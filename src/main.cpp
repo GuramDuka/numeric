@@ -1,18 +1,18 @@
 /*-
  * The MIT License (MIT)
- * 
+ *
  * Copyright (c) 2014, 2015 Guram Duka
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -41,6 +41,17 @@ int main()
 	QueryPerformanceFrequency(&freq);
 	QueryPerformanceCounter(&start);
 	hole.QuadPart = 0;
+#else
+    struct timespec res, start, stop, hole_start;
+    const uint64_t freq = 1000000000u;
+    uint64_t hole = 0;
+
+    auto ts2i = [] (struct timespec & ts) {
+        return uint64_t(ts.tv_sec) * freq + ts.tv_nsec;
+    };
+
+    clock_getres(CLOCK_PROCESS_CPUTIME_ID,&res);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&start);
 #endif
 
 	numeric hard, soft, error;
@@ -102,6 +113,8 @@ int main()
 
 #if _WIN32
 	QueryPerformanceCounter(&hole_start);
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&hole_start);
 #endif
 	cout
 		<< "sqrt(2):" << endl
@@ -111,6 +124,9 @@ int main()
 #if _WIN32
 	QueryPerformanceCounter(&stop);
 	hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+    hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
 	hard = numeric(
@@ -133,6 +149,8 @@ int main()
 
 #if _WIN32
 	QueryPerformanceCounter(&hole_start);
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&hole_start);
 #endif
 	cout
 		<< "cube_root(2):" << endl
@@ -142,6 +160,9 @@ int main()
 #if _WIN32
 	QueryPerformanceCounter(&stop);
 	hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+    hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
 	hard = numeric(
@@ -165,6 +186,8 @@ int main()
 
 #if _WIN32
 	QueryPerformanceCounter(&hole_start);
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&hole_start);
 #endif
 	cout
 		<< "sin(1) :" << endl
@@ -174,6 +197,9 @@ int main()
 #if _WIN32
 	QueryPerformanceCounter(&stop);
 	hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+    hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
 	hard = numeric(
@@ -197,6 +223,8 @@ int main()
 
 #if _WIN32
 	QueryPerformanceCounter(&hole_start);
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&hole_start);
 #endif
 	cout
 		<< "cos(1) :" << endl
@@ -206,6 +234,9 @@ int main()
 #if _WIN32
 	QueryPerformanceCounter(&stop);
 	hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+    hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
 	// http://oeis.org/A000796
@@ -254,6 +285,8 @@ int main()
 		if( pi_iter == 1 || pi_iter % 250 == 0 ){
 #if _WIN32
 			QueryPerformanceCounter(&hole_start);
+#else
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&hole_start);
 #endif
 			cout << "PI  = " << pi_c.to_string(0, pre + 2).c_str()
 				<< ", stat: " << pi_c.stat_length();
@@ -262,6 +295,9 @@ int main()
 #if _WIN32
 			QueryPerformanceCounter(&stop);
 			hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
+#else
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+            hole += ts2i(stop) - ts2i(hole_start);
 #endif
 		}
 		pi_iter++;
@@ -272,6 +308,8 @@ int main()
 
 #if _WIN32
 	QueryPerformanceCounter(&hole_start);
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&hole_start);
 #endif
 	cout << "PI(prec) = " << pi_v1000.to_string(0, pre + 2).c_str() << ", stat: " << pi_v1000.stat_length() << endl;
 	cout << "PI(calc) = " << pi_c.to_string(0, pre + 2).c_str() << ", stat: " << pi_c.stat_length() << endl;
@@ -280,6 +318,9 @@ int main()
 #if _WIN32
 	QueryPerformanceCounter(&stop);
 	hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+    hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
 #if _WIN32
@@ -289,6 +330,15 @@ int main()
 	uint64_t milisecs  = (ellapsed * 1000u) / freq.QuadPart;
 	uint64_t microsecs = (ellapsed * 1000000u) / freq.QuadPart;
 	uint64_t nanosecs  = (ellapsed * 1000000000u) / freq.QuadPart;
+#else
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+    hole += ts2i(stop) - ts2i(hole_start);
+
+	uint64_t ellapsed  = ts2i(stop) - ts2i(start) - hole;
+	uint64_t milisecs  = ellapsed * 1000u / freq;
+	uint64_t microsecs = ellapsed * 1000000u / freq;
+	uint64_t nanosecs  = ellapsed * 1000000000u / freq;
+#endif
 
 	cout << endl;
 	cout << "SECS   : " << setprecision(2) << std::fixed << (long double) milisecs / 1000u << endl;
@@ -298,7 +348,6 @@ int main()
 	cout << "INDEX  : " <<
 		microsecs / (integer::stat_iadd_ + integer::stat_isub_ + integer::stat_imul_ + integer::stat_idiv_)
 		<< endl;
-#endif
 
 	return 0;
 }
