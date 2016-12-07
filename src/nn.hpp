@@ -37,8 +37,9 @@
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4244)
-#pragma warning(disable : 4996)
 #pragma warning(disable : 4290)
+#pragma warning(disable : 4307)
+#pragma warning(disable : 4996)
 #endif
 #if __GNUC__
 #include <sys/param.h>
@@ -64,6 +65,7 @@
 #include <limits>
 #include <iostream>
 #include <iomanip>
+#include <array>
 #include <vector>
 #include <map>
 #include <new>
@@ -75,6 +77,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <random>
+#include <atomic>
 //------------------------------------------------------------------------------
 namespace tlsf {  // Two Level Segregated Fit memory allocator
 //------------------------------------------------------------------------------
@@ -304,15 +307,18 @@ typedef void * tlsf_t;
 typedef void * pool_t;
 //------------------------------------------------------------------------------
 class TLSF_Impl { // must be singleton
+    private:
+        TLSF_Impl(const TLSF_Impl &);
+        void operator = (const TLSF_Impl &);
 	public:
 		~TLSF_Impl() {
-			assert( ref_count_ == 0 );
+			assert( ref_count_.fetch_add(0) == 0 );
 			assert( pools_ == nullptr );
 			assert( tlsf_ == nullptr );
 		}
 
-		TLSF_Impl() {
-			assert( ref_count_ == 0 );
+		TLSF_Impl() : ref_count_(0) {
+			assert( ref_count_.fetch_add(0) == 0 );
 			assert( pools_ == nullptr );
 			assert( tlsf_ == nullptr );
 		}
@@ -321,7 +327,7 @@ class TLSF_Impl { // must be singleton
 		void * realloc(void * p, size_t sz);
 		void free(void * p);
 	protected:
-		intptr_t ref_count_ = 0;
+		std::atomic_uintptr_t ref_count_;
 		pool_t * pools_ = nullptr;
 		tlsf_t tlsf_ = nullptr;
 
@@ -411,13 +417,13 @@ class TLSF_Impl { // must be singleton
 		template <typename T> static const T & tlsf_min(const T & a,const T & b) { return a < b ? a : b; }
 		template <typename T> static const T & tlsf_max(const T & a,const T & b) { return a > b ? a : b; }
 
-		static const size_t pool_size()						{ return size_t(256) * 1024u * 1024u; }
-		static const size_t block_header_free_bit()			{ return size_t(1) << 0; }
-		static const size_t block_header_prev_free_bit()	{ return size_t(1) << 1; }
-		static const size_t block_header_overhead()			{ return sizeof(size_t); }
-		static const size_t block_start_offset()			{ return offsetof(block_header_t, size) + sizeof(size_t); }
-		static const size_t block_size_min()				{ return sizeof(block_header_t) - sizeof(block_header_t *); }
-		static const size_t block_size_max()				{ return size_t(1) << FL_INDEX_MAX; }
+		static constexpr size_t pool_size()						{ return size_t(64) * 1024u * 1024u; }
+		static constexpr size_t block_header_free_bit()			{ return size_t(1) << 0; }
+		static constexpr size_t block_header_prev_free_bit()	{ return size_t(1) << 1; }
+		static constexpr size_t block_header_overhead()			{ return sizeof(size_t); }
+		static constexpr size_t block_start_offset()			{ return offsetof(block_header_t, size) + sizeof(size_t); }
+		static constexpr size_t block_size_min()				{ return sizeof(block_header_t) - sizeof(block_header_t *); }
+		static constexpr size_t block_size_max()				{ return size_t(1) << FL_INDEX_MAX; }
 
 		static size_t block_size(const block_header_t * block) {
 			return block->size & ~(block_header_free_bit() | block_header_prev_free_bit());
@@ -546,11 +552,11 @@ class TLSF_Impl { // must be singleton
 			int fl = *fli;
 			int sl = *sli;
 
-			unsigned int sl_map = control->sl_bitmap[fl] & (~0 << sl);
+			unsigned int sl_map = control->sl_bitmap[fl] & (~0u << sl);
 
 			if( !sl_map ) {
 				/* No block exists. Search in the next largest first-level list. */
-				const unsigned int fl_map = control->fl_bitmap & (~0 << (fl + 1));
+				const unsigned int fl_map = control->fl_bitmap & (~0u << (fl + 1));
 
 				if( !fl_map )
 					return nullptr;
@@ -722,31 +728,31 @@ class TLSF_Impl { // must be singleton
 			}
 		}
 
-		static size_t tlsf_size() {
+		static constexpr size_t tlsf_size() {
 			return sizeof(control_t);
 		}
 
-		static size_t tlsf_align_size() {
+		static constexpr size_t tlsf_align_size() {
 			return ALIGN_SIZE;
 		}
 
-		static size_t tlsf_block_size_min() {
+		static constexpr size_t tlsf_block_size_min() {
 			return block_size_min();
 		}
 
-		static size_t tlsf_block_size_max() {
+		static constexpr size_t tlsf_block_size_max() {
 			return block_size_max();
 		}
 
-		static size_t tlsf_pool_overhead() {
+		static constexpr size_t tlsf_pool_overhead() {
 			return 2 * block_header_overhead();
 		}
 
-		static size_t tlsf_alloc_overhead() {
+		static constexpr size_t tlsf_alloc_overhead() {
 			return block_header_overhead();
 		}
 
-		static size_t tlsf_pool_max_block() {
+		static constexpr size_t tlsf_pool_max_block() {
 			return pool_size() - tlsf_pool_overhead() - block_header_overhead() - tlsf_size();
 		}
 
@@ -846,6 +852,11 @@ class TLSF_Impl { // must be singleton
 			return block_prepare_used(control, block, adjust);
 		}
 
+		static size_t tlsf_block_size(void * ptr) {
+			block_header_t * block = block_from_ptr(ptr);
+			return block_size(block);
+		}
+
 		static void tlsf_free(tlsf_t tlsf, void * ptr) {
 			if( ptr != nullptr ) {
 				control_t * control = (control_t *) tlsf;
@@ -902,14 +913,13 @@ class TLSF_Impl { // must be singleton
 //------------------------------------------------------------------------------
 inline void * TLSF_Impl::malloc(size_t sz)
 {
-	errno = 0;
 	void * p = nullptr;
 	void * mem = nullptr;
 	const bool is_tlsf_size = sz <= tlsf_pool_max_block();
 
 	if( tlsf_ == nullptr && is_tlsf_size ){
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-		mem = VirtualAlloc(NULL,pool_size(),MEM_COMMIT,PAGE_READWRITE);
+		mem = VirtualAlloc(NULL, pool_size(), MEM_COMMIT, PAGE_READWRITE);
 #else
 		mem = ::malloc(pool_size());
 #endif
@@ -919,11 +929,11 @@ inline void * TLSF_Impl::malloc(size_t sz)
 			return nullptr;
 		}
 
-		tlsf_ = tlsf_create_with_pool(mem,pool_size());
+		tlsf_ = tlsf_create_with_pool(mem, pool_size());
 
 		if( tlsf_ == nullptr ){
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-			VirtualFree(mem,0,MEM_RELEASE);
+			VirtualFree(mem, 0, MEM_RELEASE);
 #else
 			::free(mem);
 #endif
@@ -954,7 +964,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 
 		if( pools_ == nullptr || pc != npc )
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-			p_pool = (pool_t *) VirtualAlloc(NULL,npc * page_size,MEM_COMMIT,PAGE_READWRITE);
+			p_pool = (pool_t *) VirtualAlloc(NULL, npc * page_size, MEM_COMMIT, PAGE_READWRITE);
 #else
 			p_pool = (pool_t *) ::malloc(npc * page_size);
 #endif
@@ -963,7 +973,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 
 		if( p_pool == NULL ){
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-			VirtualFree(mem,0,MEM_RELEASE);
+			VirtualFree(mem, 0, MEM_RELEASE);
 #else
 			::free(mem);
 #endif
@@ -974,7 +984,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 				if( pools_ != nullptr )
 					memcpy(p_pool,pools_,csz);
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-				VirtualFree(pools_,0,MEM_RELEASE);
+				VirtualFree(pools_, 0, MEM_RELEASE);
 #else
 				::free(pools_);
 #endif
@@ -982,7 +992,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 			}
 
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-			mem = VirtualAlloc(NULL,pool_size(),MEM_COMMIT,PAGE_READWRITE);
+			mem = VirtualAlloc(NULL, pool_size(), MEM_COMMIT, PAGE_READWRITE);
 #else
 			mem = ::malloc(pool_size());
 #endif
@@ -995,7 +1005,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 
 			if( pool == nullptr ){
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-				VirtualFree(mem,0,MEM_RELEASE);
+				VirtualFree(mem, 0, MEM_RELEASE);
 #else
 				::free(mem);
 #endif
@@ -1012,7 +1022,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 
 	if( p == nullptr ) {
 #if defined(_INC_WINDOWS) && defined(_WIN32)
-		p = VirtualAlloc(NULL,sz,MEM_COMMIT,PAGE_READWRITE);
+		p = VirtualAlloc(NULL, sz, MEM_COMMIT, PAGE_READWRITE);
 #else
 		p = ::malloc(sz + sizeof(size_t));
 		*(size_t *) p = sz;
@@ -1020,15 +1030,20 @@ inline void * TLSF_Impl::malloc(size_t sz)
 #endif
 	}
 
-	if( p == nullptr )
+	if( p == nullptr ) {
 		errno = ENOMEM;
-	else
-		ref_count_++;
+	}
+	else {
+		ref_count_.fetch_add(1);
+#if _DEBUG
+		memset(p, 0xCC, sz);
+#endif
+	}
 
 	return p;
 }
 //------------------------------------------------------------------------------
-inline void * TLSF_Impl::realloc(void * pp,size_t sz)
+inline void * TLSF_Impl::realloc(void * pp, size_t sz)
 {
 	void * p = nullptr;
 
@@ -1044,14 +1059,14 @@ inline void * TLSF_Impl::realloc(void * pp,size_t sz)
 		uintptr_t pools = pools_ == nullptr ? 0 : uintptr_t(pools_[0]);
 
 		in_pool = in_pool ||
-			bsearch(pools_,1,pools,pp,[] (const pool_t & key,const pool_t & b) {
+			bsearch(pools_, 1, pools, pp, [] (const pool_t & key,const pool_t & b) {
 				return (uintptr_t) key >= (uintptr_t) b + pool_size() ? 1 : key < b ? -1 : 0;
 			}) >= 0;
 
 		size_t cursize = 0;
 
 		if( in_pool )
-			p = tlsf_realloc(tlsf_,pp,sz,&cursize);
+			p = tlsf_realloc(tlsf_, pp, sz, &cursize);
 
 		if( p == nullptr ){
 			p = this->malloc(sz);
@@ -1060,18 +1075,15 @@ inline void * TLSF_Impl::realloc(void * pp,size_t sz)
 				if( cursize == 0 ){
 #if defined(_INC_WINDOWS) && defined(_WIN32)
 					MEMORY_BASIC_INFORMATION info;
-					VirtualQuery(pp,&info,sizeof(info));
+					VirtualQuery(pp, &info, sizeof(info));
 					cursize = info.RegionSize;
 #else
 					cursize = ((size_t *) p)[-1];
 #endif
 				}
-				memcpy(p,pp,cursize > sz ? sz : cursize);
+				memcpy(p, pp, cursize > sz ? sz : cursize);
 				this->free(pp);
 			}
-		}
-		else {
-			errno = 0;
 		}
 	}
 
@@ -1086,14 +1098,23 @@ inline void TLSF_Impl::free(void * p)
 
 		in_pool = in_pool ||
 			bsearch(pools_, 1, pools, p, [](const pool_t & key, const pool_t & b) {
-			return (uintptr_t) key >= (uintptr_t) b + pool_size() ? 1 : key < b ? -1 : 0;
-		}) >= 0;
+				return (uintptr_t) key >= (uintptr_t) b + pool_size() ? 1 : key < b ? -1 : 0;
+			}) >= 0;
+
 
 		if( in_pool ){
+#if _DEBUG
+			memset(p, 0xCD, tlsf_block_size(p));
+#endif
 			tlsf_free(tlsf_, p);
 		}
 		else {
 #if defined(_INC_WINDOWS) && defined(_WIN32)
+#if _DEBUG
+			MEMORY_BASIC_INFORMATION info;
+			VirtualQuery(p, &info, sizeof(info));
+			memset(p, 0xCD, info.RegionSize);
+#endif
 			VirtualFree(p, 0, MEM_RELEASE);
 #else
 			p = (uint8_t *) p - sizeof(size_t);
@@ -1101,7 +1122,7 @@ inline void TLSF_Impl::free(void * p)
 #endif
 		}
 
-		if( --ref_count_ == 0 && tlsf_ != nullptr ){
+		if( ref_count_.fetch_sub(1) == 1 && tlsf_ != nullptr ){
 			while( pools > 0 ){
 				tlsf_remove_pool(tlsf_, pools_[pools]);
 #if defined(_INC_WINDOWS) && defined(_WIN32)
@@ -1131,8 +1152,6 @@ inline void TLSF_Impl::free(void * p)
 
 	errno = 0;
 }
-//------------------------------------------------------------------------------
-TLSF_Impl static_allocator;
 //------------------------------------------------------------------------------
 } // namespace tlsf - Two Level Segregated Fit memory allocator
 //------------------------------------------------------------------------------
@@ -1208,26 +1227,46 @@ typedef int64_t sdword;
 #define SIZEOF_WORD 4
 #endif
 //------------------------------------------------------------------------------
+#if SIZEOF_WORD < 8
+typedef uintmax_t umaxword_t;
+#else
+typedef __uint128_t umaxword_t;
+#endif
+//------------------------------------------------------------------------------
 class integer;
 class numeric;
 //------------------------------------------------------------------------------
 /////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-typedef struct nn_integer_data {
-	mutable intptr_t ref_count_;
-	mutable uintptr_t length_;
+typedef class nn_integer_data {
+    protected:
+        nn_integer_data(intptr_t ref_count, uintptr_t length)
+            : ref_count_(ref_count), length_(length), dummy_(0) {}
+    public:
+		~nn_integer_data() {}
+
+        nn_integer_data(umaxword_t data)
+            : ref_count_(1), length_(sizeof(data) / sizeof(data_[0])), dummy_(0) {
+            for( size_t i = 0; i < sizeof(data) / sizeof(data_[0]); i++ ) {
+                data_[i] = (word) data;
+                data >>= sizeof(data_[0]) * CHAR_BIT;
+            }
+        }
+
+        mutable std::atomic_uintptr_t ref_count_;
+        mutable uintptr_t length_;
 #if SIZEOF_WORD == 1
-	mutable uintptr_t dummy_;		// for shift down overflow bits
-	mutable word data_[16];
+        mutable uintptr_t dummy_;		// for shift down overflow bits
+        mutable word data_[16];
 #elif SIZEOF_WORD == 2
-	mutable uintptr_t dummy_;		// for shift down overflow bits
-	mutable word data_[8];
+        mutable uintptr_t dummy_;		// for shift down overflow bits
+        mutable word data_[8];
 #elif SIZEOF_WORD == 4
-	mutable uintptr_t dummy_;
-	mutable word data_[4];
+        mutable uintptr_t dummy_;
+        mutable word data_[4];
 #elif SIZEOF_WORD == 8
-	mutable word dummy_;
-	mutable word data_[4];
+        mutable word dummy_;
+        mutable word data_[4];
 #else
 #error Invalid macro SIZEOF_WORD
 #endif
@@ -1235,26 +1274,31 @@ typedef struct nn_integer_data {
 	typedef nn_integer_data * nn_integer;
 
 	nn_integer add_ref() const {
-	  ref_count_++;
+	  ref_count_.fetch_add(1);
 	  return const_cast<nn_integer>(this);
 	}
 
-	static uintptr_t get_size(uintptr_t length) {
-		nn_integer_data pp;
-		return (uintptr_t) pp.data_ - (uintptr_t) &pp + (length + 2) * sizeof(pp.data_[0]);
+	static size_t get_size(uintptr_t length) {
+		return offsetof(nn_integer_data, data_) + (length + 2) * sizeof(data_[0]);
 	}
 
+	static tlsf::TLSF_Impl & static_allocator() {
+		static tlsf::TLSF_Impl allocator; // singleton
+		return allocator;
+	}
+
+
 	static nn_integer nn_new(uintptr_t length) {
-		nn_integer p = (nn_integer) tlsf::static_allocator.malloc(get_size(length));
-		p->ref_count_ = 1;
-		p->length_ = length;
-		p->dummy_ = 0;
+		nn_integer p = (nn_integer) static_allocator().malloc(get_size(length));
+		new (p) nn_integer_data(1, length);
 		return p;
 	}
 
 	void release() {
-		if( --ref_count_ == 0 )
-			tlsf::static_allocator.free(this);
+		if( ref_count_.fetch_sub(1) == 1 ){
+            this->~nn_integer_data();
+			static_allocator().free(this);
+		}
 	}
 
 	sword isign() const {
@@ -1696,25 +1740,85 @@ typedef struct nn_integer_data {
 //------------------------------------------------------------------------------
 typedef nn_integer_data::nn_integer nn_integer;
 //------------------------------------------------------------------------------
-nn_integer_data nn_izero = { 1, 1, 0, { 0 } };
-nn_integer_data nn_ione = { 1, 1, 0, { 1 } };
-nn_integer_data nn_itwo = { 1, 1, 0, { 2 } };
-nn_integer_data nn_ifour = { 1, 1, 0, { 4 } };
-nn_integer_data nn_ifive = { 1, 1, 0, { 5 } };
-nn_integer_data nn_isix = { 1, 1, 0, { 6 } };
-nn_integer_data nn_ieight = { 1, 1, 0, { 8 } };
-nn_integer_data nn_iten = { 1, 1, 0, { 10 } };
+/* Quick and dirty conversion from a single character to its hex equivelent */
+constexpr uint8_t hex_char2int(char input)
+{
+    return
+    ((input >= 'a') && (input <= 'f'))
+    ? (input - 'a')
+    : ((input >= 'A') && (input <= 'F'))
+    ? (input - 'A')
+    : ((input >= '0') && (input <= '9'))
+    ? (input - '0')
+    : throw std::exception{};
+}
+
+/* Position the characters into the appropriate nibble */
+constexpr uint8_t hex_char(char high, char low)
+{
+    return (hex_char2int(high) << 4) | (hex_char2int(low));
+}
+
+/* Adapter that performs sets of 2 characters into a single byte and combine the results into a uniform initialization list used to initialize T */
+template <typename T, size_t length, size_t ... index>
+constexpr T hex_string(const char (&input)[length], const std::index_sequence<index...>&)
+{
+    return T{hex_char(input[index * 2], input[index * 2 + 1])...};
+}
+
+/* Entry function */
+template <typename T, std::size_t length>
+constexpr T hex_string(const char (&input)[length])
+{
+    return hex_string<T>(input, std::make_index_sequence<(length / 2)>{});
+}
+
+constexpr auto Y = hex_string<std::array<std::uint8_t, 3>>("ABCDEF");
+
+#if _MSC_VER
+template <typename T> constexpr const T uint_max(const T m = T(1))
+{
+	return (m << 3) + (m << 1) > m ? uint_max<T>((m << 3) + (m << 1)) : m;
+}
+#else
+template <typename T> constexpr const T uint_max()
+{
+	T m = 1u;
+
+	for (;;) {
+		T n = T(m * 10u);
+		if( n <= m ) // overflow
+			break;
+		m = n;
+	}
+
+	return m;
+}
+#endif
+
+extern const nn_integer_data nn_izero(0);
+extern const nn_integer_data nn_ione(1);
+extern const nn_integer_data nn_itwo(2);
+extern const nn_integer_data nn_ifour(4);
+extern const nn_integer_data nn_ifive(5);
+extern const nn_integer_data nn_isix(6);
+extern const nn_integer_data nn_ieight(8);
+extern const nn_integer_data nn_iten(10);
 // 1000000000u								== 0x3B9ACA00
 // 10000000000000000000u					== 0x8AC7230489E80000
 // 100000000000000000000000000000000000000u	== 0x4B3B4CA85A86C47A098A224000000000
 #if SIZEOF_WORD == 1
-nn_integer_data nn_maxull = { 1, 4, 0, { 0x00, 0xCA, 0x9A, 0x3B } };
+//extern const nn_integer_data nn_maxull = { 1, 4, 0, { 0x00, 0xCA, 0x9A, 0x3B } };
+extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
 #elif SIZEOF_WORD == 2
-nn_integer_data nn_maxull = { 1, 4, 0, { 0x0000, 0x89E8, 0x2304, 0x8AC7 } };
+//extern const nn_integer_data nn_maxull = { 1, 4, 0, { 0x0000, 0x89E8, 0x2304, 0x8AC7 } };
+extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
 #elif SIZEOF_WORD == 4
-nn_integer_data nn_maxull = { 1, 2, 0, { 0x89E80000, 0x8AC72304 } };
+//extern const nn_integer_data nn_maxull = { 1, 2, 0, { 0x89E80000, 0x8AC72304 } };
+extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
 #elif SIZEOF_WORD == 8
-nn_integer_data nn_maxull = { 1, 2, 0, { 0x098A224000000000ull, 0x4B3B4CA85A86C47Aull } };
+//extern const nn_integer_data nn_maxull = { 1, 2, 0, { 0x098A224000000000ull, 0x4B3B4CA85A86C47Aull } };
+extern const nn_integer_data nn_maxull(uint_max<umaxword_t>());
 #endif
 //------------------------------------------------------------------------------
 static inline nn_integer nn_new(uintptr_t length)
@@ -1901,7 +2005,7 @@ class integer {
 
 		// at user level, must not be used
 		integer(nn_integer p) : proxy_(p) {}
-		integer(nn_integer p, int) : proxy_(p->add_ref()) {}
+		integer(const nn_integer_data * p, int) : proxy_(p->add_ref()) {}
 
 		// at user level, must not be used
 		nn_integer reset(nn_integer p){
@@ -2061,7 +2165,7 @@ class integer {
 			return compare(v) != 0;
 		}
 
-		integer operator ++ () {
+		integer & operator ++ () {
 			return *this += 1;
 		}
 
@@ -2070,7 +2174,7 @@ class integer {
 			return *this += 1;
 		}
 
-		integer operator -- () {
+		integer & operator -- () {
 			return *this -= 1;
 		}
 
@@ -2178,12 +2282,12 @@ class integer {
 		mutable nn_integer proxy_;
 
 		template <typename T = word>
-		void sbit(uintptr_t i,const T v = 1) const {
-			if( proxy_->ref_count_ > 1 || i >= proxy_->length_ * sizeof(word) * CHAR_BIT ){
+		void sbit(uintptr_t i, const T v = 1) const {
+			if( proxy_->ref_count_.fetch_add(0) > 1 || i >= proxy_->length_ * sizeof(word) * CHAR_BIT ){
 				uintptr_t new_bit_size = (i + 1) + (-intptr_t(i + 1) & (sizeof(word) * CHAR_BIT - 1));
 				uintptr_t new_size = new_bit_size / (sizeof(word) * CHAR_BIT);
 
-				nn_integer result = nn_new(imax(new_size,proxy_->length_));
+				nn_integer result = nn_new(imax(new_size, proxy_->length_));
 
 				memcpy(result->data_,proxy_->data_,sizeof(word) * proxy_->length_);
 
@@ -2659,7 +2763,7 @@ inline bool integer::is_zero() const
 	if( proxy_->z() ){
 		nn_izero.add_ref();
 		proxy_->release();
-		proxy_ = &nn_izero;
+		proxy_ = const_cast<nn_integer>(&nn_izero);
 		return true;
 	}
 
@@ -2680,7 +2784,7 @@ inline bool integer::is_one() const
 
 	nn_ione.add_ref();
 	proxy_->release();
-	proxy_ = &nn_ione;
+	proxy_ = const_cast<nn_integer>(&nn_ione);
 
 	return true;
 }
@@ -2699,7 +2803,7 @@ inline bool integer::is_ten() const
 
 	nn_iten.add_ref();
 	proxy_->release();
-	proxy_ = &nn_iten;
+	proxy_ = const_cast<nn_integer>(&nn_iten);
 
 	return true;
 }
@@ -3034,7 +3138,7 @@ inline integer integer::div(const integer & divider, integer * p_mod) const
 
 	for( intptr_t i = n.proxy_->length_ * sizeof(word) * CHAR_BIT - 1; i >= 0; i-- ){
 		r <<= 1;
-		r.sbit(0,n.bit(i));
+		r.sbit(0, n.bit(i));
 
 		if( r >= d ){
 			r -= d;
@@ -3144,7 +3248,7 @@ class numeric {
 			return *this = *this / v;
 		}
 
-		numeric operator ++ () {
+		numeric & operator ++ () {
 			return *this += integer(1);
 		}
 
@@ -3153,7 +3257,7 @@ class numeric {
 			return *this += integer(1);
 		}
 
-		numeric operator -- () {
+		numeric & operator -- () {
 			return *this -= integer(1);
 		}
 
