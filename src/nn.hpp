@@ -1,18 +1,18 @@
 /*-
  * The MIT License (MIT)
- * 
- * Copyright (c) 2014, 2015 Guram Duka
- * 
+ *
+ * Copyright (c) 2014, 2015, 2016 Guram Duka
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -1175,24 +1175,36 @@ typedef uint64_t word;
 typedef int64_t sword;
 typedef __uint128_t dword;
 typedef __int128_t sdword;
+#ifdef SIZEOF_WORD
+#undef SIZEOF_WORD
+#endif
 #define SIZEOF_WORD 8
 #elif _MSC_VER && _M_IX86
 typedef uint32_t word;
 typedef int32_t sword;
 typedef uint64_t dword;
 typedef int64_t sdword;
+#ifdef SIZEOF_WORD
+#undef SIZEOF_WORD
+#endif
 #define SIZEOF_WORD 4
 #elif _MSC_VER && _M_X64
 typedef uint32_t word;
 typedef int32_t sword;
 typedef uint64_t dword;
 typedef int64_t sdword;
+#ifdef SIZEOF_WORD
+#undef SIZEOF_WORD
+#endif
 #define SIZEOF_WORD 4
 #else
 typedef uint32_t word;
 typedef int32_t sword;
 typedef uint64_t dword;
 typedef int64_t sdword;
+#ifdef SIZEOF_WORD
+#undef SIZEOF_WORD
+#endif
 #define SIZEOF_WORD 4
 #endif
 //------------------------------------------------------------------------------
@@ -2921,7 +2933,8 @@ inline integer integer::operator * (const integer & v) const
 	}
 
 	integer a(abs());
-	nn_integer r = nn_new(a.proxy_->length_ + b.proxy_->length_ + 1);
+	uintptr_t jj = b.proxy_->length_, ii = a.proxy_->length_;
+	nn_integer r = nn_new(ii + jj + 1);
 
 	memset(r->data_,0,(r->length_ + 2) * sizeof(word));
 
@@ -2932,16 +2945,18 @@ inline integer integer::operator * (const integer & v) const
 #endif
 
 	word * ap = a.proxy_->data_, * bp = b.proxy_->data_;
+	uintptr_t i = 0;
 
-	for( uintptr_t jj = b.proxy_->length_, ii = a.proxy_->length_, i = 0; i < ii; i++ ){
+	while( i < ii  ){
 #if 0 && (__SSE2__ || _M_IX86_FP >= 2 || __AVX__ || __AVX2__) && SIZEOF_WORD == 4
 		ccp[2] = ccp[0] = ap[i];
 		aa = _mm_load_si128(&cc);
 #else
 		dword h = ap[i];
 #endif
+		uintptr_t j = 0;
 
-		for( uintptr_t j = 0; j < jj; ){
+		while( j < jj ){
 #if 0 && (__SSE2__ || _M_IX86_FP >= 2 || __AVX__ || __AVX2__) && SIZEOF_WORD == 4
 			bbp[0] = bp[j];
 			bbp[2] = bp[j + 1];
@@ -2970,6 +2985,8 @@ inline integer integer::operator * (const integer & v) const
 			j++;
 #endif
 		}
+
+		i++;
 	}
 
 	r->normalize();
