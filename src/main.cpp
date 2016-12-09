@@ -32,10 +32,10 @@ int main()
 	cout.precision(120);
 
 #if _WIN32
-	SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
-	SetProcessAffinityMask(GetCurrentProcess(), 1);
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-	SetThreadAffinityMask(GetCurrentThread(), 1);
+	//SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
+	//SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+	//SetProcessAffinityMask(GetCurrentProcess(), 1);
+	//SetThreadAffinityMask(GetCurrentThread(), 1);
 
 	LARGE_INTEGER freq, start, stop, hole, hole_start;
 	QueryPerformanceFrequency(&freq);
