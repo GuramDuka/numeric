@@ -4,18 +4,16 @@
 	<Project>
 		<Option title="numeric" />
 		<Option pch_mode="2" />
-		<Option compiler="gcc" />
+		<Option compiler="clang" />
 		<Build>
 			<Target title="debug_x86">
 				<Option output="../bin/numeric_debug_x86" prefix_auto="1" extension_auto="1" />
 				<Option object_output="../obj/debug_x86/" />
 				<Option type="1" />
-				<Option compiler="gcc" />
+				<Option compiler="clang" />
 				<Compiler>
 					<Add option="-m32" />
-					<Add option="-Og" />
 					<Add option="-g" />
-					<Add option="-g3" />
 				</Compiler>
 				<Linker>
 					<Add option="-m32" />
@@ -25,7 +23,7 @@
 				<Option output="../bin/numeric_release_x86" prefix_auto="1" extension_auto="1" />
 				<Option object_output="../obj/release_x86/" />
 				<Option type="1" />
-				<Option compiler="gcc" />
+				<Option compiler="clang" />
 				<Compiler>
 					<Add option="-O3" />
 					<Add option="-m32" />
@@ -40,12 +38,10 @@
 				<Option output="../bin/numeric_debug_x64" prefix_auto="1" extension_auto="1" />
 				<Option object_output="../obj/debug_x64/" />
 				<Option type="1" />
-				<Option compiler="gcc" />
+				<Option compiler="clang" />
 				<Compiler>
 					<Add option="-m64" />
-					<Add option="-Og" />
 					<Add option="-g" />
-					<Add option="-g3" />
 				</Compiler>
 				<Linker>
 					<Add option="-m64" />
@@ -55,7 +51,7 @@
 				<Option output="../bin/numeric_release_x64" prefix_auto="1" extension_auto="1" />
 				<Option object_output="../obj/release_x64/" />
 				<Option type="1" />
-				<Option compiler="gcc" />
+				<Option compiler="clang" />
 				<Compiler>
 					<Add option="-O3" />
 					<Add option="-m64" />
@@ -68,20 +64,25 @@
 			</Target>
 		</Build>
 		<Compiler>
-			<Add option="-Weffc++" />
-			<Add option="-Wextra" />
+			<Add option="-fms-extensions" />
+			<Add option="-Werror" />
 			<Add option="-Wall" />
 			<Add option="-std=c++14" />
-			<Add option="-fexceptions" />
-			<Add option="-fms-extensions" />
+			<Add option="-Weffc++" />
+			<Add option="-Wfatal-errors" />
+			<Add option="-Wextra" />
 		</Compiler>
 		<Linker>
-			<Add option="-static-libstdc++" />
-			<Add option="-static-libgcc" />
-			<Add option="-static" />
+			<Add option="-shared-libstdc++" />
+			<Add option="-shared-libgcc" />
+			<Add option="-shared" />
 		</Linker>
+		<Unit filename="../src/id.hpp" />
+		<Unit filename="../src/ii.hpp" />
 		<Unit filename="../src/main.cpp" />
 		<Unit filename="../src/nn.hpp" />
+		<Unit filename="../src/tlsf.hpp" />
+		<Unit filename="../src/wk.hpp" />
 		<Extensions>
 			<code_completion />
 			<envvars />

@@ -125,7 +125,7 @@ typedef class nn_integer_data {
             }
         }
 
-        mutable std::atomic_uintptr_t ref_count_;
+        mutable uintptr_t ref_count_;
         mutable uintptr_t length_;
 #if SIZEOF_WORD == 1
         mutable uintptr_t dummy_;		// for shift down overflow bits
@@ -146,7 +146,7 @@ typedef class nn_integer_data {
 	typedef nn_integer_data * nn_integer;
 
 	nn_integer add_ref() const {
-	  ref_count_.fetch_add(1);
+	  ref_count_++;
 	  return const_cast<nn_integer>(this);
 	}
 
@@ -159,7 +159,6 @@ typedef class nn_integer_data {
 		return allocator;
 	}
 
-
 	static nn_integer nn_new(uintptr_t length) {
 		nn_integer p = (nn_integer) static_allocator().malloc(get_size(length));
 
@@ -170,7 +169,7 @@ typedef class nn_integer_data {
 	}
 
 	void release() {
-		if( ref_count_.fetch_sub(1) == 1 ){
+		if( --ref_count_ == 0 ){
             this->~nn_integer_data();
 			static_allocator().free(this);
 		}
@@ -466,8 +465,8 @@ typedef class nn_integer_data {
 
 		while( value != 0 && index < length_ ) {
 			q = (dword) data_[index] + value;
-			data_[index] = q;
-			value = q >> (sizeof(word) * CHAR_BIT);
+			data_[index] = (word) q;
+			value = word(q >> (sizeof(word) * CHAR_BIT));
 			index++;
 		}
 	}
@@ -479,8 +478,8 @@ typedef class nn_integer_data {
 
 			dword q = (dword) m * b->data_[j];
 
-			accumulate_with_carry(i + j, q);
-			accumulate_with_carry(i + j + 1, q >> (sizeof(word) * CHAR_BIT));
+			accumulate_with_carry(i + j, word(q));
+			accumulate_with_carry(i + j + 1, word(q >> (sizeof(word) * CHAR_BIT)));
 		}
 	}
 
@@ -831,7 +830,7 @@ static inline nn_integer nn_init_iulong(unsigned long v)
 //------------------------------------------------------------------------------
 #if __GNUC__ && NDEBUG
 #pragma GCC push_options
-//#pragma GCC optimize("O2")
+#pragma GCC optimize("O3")
 #endif
 //------------------------------------------------------------------------------
 inline nn_integer nn_integer_data::isal(uintptr_t bit_count) const
@@ -863,7 +862,7 @@ inline nn_integer nn_integer_data::isal(uintptr_t bit_count) const
 	}
 	else {
 		for( intptr_t i = length_ - 1; i >= 0; i--, dst.w--, src.w-- )
-		*dst.d = *src.d << shift;
+            *dst.d = (*src.d) << shift;
 	}
 
 	result->data_[result->length_ + 1] = result->data_[result->length_] = isign();

@@ -247,7 +247,7 @@ class integer {
 		void base10string(std::string & s,const bool keep_leading_zeros = false) const;
 		void base16string(std::string & s,const bool uppercase = false) const;
 
-		const std::string to_string(uintptr_t width = 0,uintptr_t base = 10) const;
+		const std::string to_string(uintptr_t width = 0, uintptr_t base = 10) const;
 
 		operator const std::string () const {
 			return to_string();
@@ -324,7 +324,7 @@ class integer {
 
 		template <typename T = word>
 		void sbit(uintptr_t i, const T v = 1) const {
-			if( proxy_->ref_count_.fetch_add(0) > 1 || i >= proxy_->length_ * sizeof(word) * CHAR_BIT ){
+			if( proxy_->ref_count_ > 1 || i >= proxy_->length_ * sizeof(word) * CHAR_BIT ){
 				uintptr_t new_bit_size = (i + 1) + (-intptr_t(i + 1) & (sizeof(word) * CHAR_BIT - 1));
 				uintptr_t new_size = new_bit_size / (sizeof(word) * CHAR_BIT);
 
@@ -368,7 +368,8 @@ class integer {
 		//static std::vector<integer> ten_cache_;
 		//static std::vector<integer> factorial_cache_;
 
-		integer tmul(const integer & v) const;
+        template <size_t SIZE> integer tmul_a(const integer & v) const;
+		integer tmul_v(const integer & v) const;
 };
 //------------------------------------------------------------------------------
 uintptr_t integer::stat_iadd_ = 0;
@@ -657,7 +658,7 @@ inline void integer::base16string(std::string & s,bool uppecase) const
 	}
 }
 //------------------------------------------------------------------------------
-inline const std::string integer::to_string(uintptr_t width,uintptr_t base) const
+inline const std::string integer::to_string(uintptr_t width, uintptr_t base) const
 {
 	if( is_zero() )
 		return "0";
@@ -1001,11 +1002,10 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 		else if( v.is_neg() ){
 			out << '-';
 		}
-		out << v.abs().to_string(out.width(),10);
+		out << v.abs().to_string(uintptr_t(out.width()), 10);
 	}
 	return out;
 }
-//------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 //inline integer integer::operator * (const integer & v) const
 //{
@@ -1132,17 +1132,78 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 //}
 //------------------------------------------------------------------------------
 static const auto thread_hardware_concurrency = std::thread::hardware_concurrency();
+static ThreadPool pool(thread_hardware_concurrency);
 //------------------------------------------------------------------------------
-inline integer integer::tmul(const integer & v) const
+template <size_t SIZE>
+inline integer integer::tmul_a(const integer & v) const
 {
-	static std::random_device rd;
-	static std::uniform_int_distribution<int> dist(0, 255);
-	static ThreadPool pool(thread_hardware_concurrency);
+	integer s(0);
 	// allocate accumulators
+	std::array<nn_integer, SIZE> accums;
+	uintptr_t ai = 0;
+
+	try {
+		//static std::random_device rd;
+		//static std::uniform_int_distribution<int> dist(0, 255);
+
+		integer a(abs()), b(v.abs());
+
+		for( uintptr_t i = 0; i < a.proxy_->length_; i++ ) {
+			word m = a.proxy_->data_[i];
+
+			if( m == 0 )
+				continue;
+
+			nn_integer r = nn_new(a.proxy_->length_ + b.proxy_->length_ + 1);
+			accums[ai++] = r;
+
+			pool.run_task(std::bind([&] (nn_integer r, nn_integer b, uintptr_t i, word m) -> void {
+
+				//std::unique_ptr<std::array<uint8_t, 1 * 1024 * 1024>> buf;
+				//buf.reset(new decltype(buf)::element_type);
+
+				//for( auto & i : *buf )
+				//	i = dist(rd);
+
+				//cdc256 ctx256;
+				//ctx256.init();
+				//ctx256.update(*buf);
+				//auto digest256 = ctx256.final();
+
+				//cdc512 ctx512;
+				//ctx512.init();
+				//ctx512.update(*buf);
+				//auto digest512 = ctx512.final();
+
+				//m = m;
+
+				memset(r->data_, 0, (r->length_ + 2) * sizeof(word));
+				r->imul(b, i, m);
+			}, r, b.proxy_, i, m));
+		}
+
+		pool.wait();
+
+		if( (is_neg() ^ v.is_neg()) != 0 ) {
+			while( ai > 0 )
+				s -= accums[--ai];
+		}
+		else {
+			while( ai > 0 )
+				s += accums[--ai];
+		}
+	}
+	catch(...) {
+		while( ai > 0 )
+			accums[--ai]->release();
+	}
+
+	return s;
+}
+//------------------------------------------------------------------------------
+inline integer integer::tmul_v(const integer & v) const
+{
 	std::vector<integer> accums;
-	//accums.reserve(a.proxy_->length_);
-	//std::vector<decltype(pool)::TaskType> tasks;
-	//tasks.reserve(a.proxy_->length_);
 
 	integer a(abs()), b(v.abs());
 
@@ -1153,28 +1214,10 @@ inline integer integer::tmul(const integer & v) const
 			continue;
 
 		nn_integer r = nn_new(a.proxy_->length_ + b.proxy_->length_ + 1);
-		accums.push_back(r);
+
+		accums.emplace_back(r);
 
 		pool.run_task(std::bind([&] (nn_integer r, nn_integer b, uintptr_t i, word m) -> void {
-			
-			//std::unique_ptr<std::array<uint8_t, 1 * 1024 * 1024>> buf;
-			//buf.reset(new decltype(buf)::element_type);
-
-			//for( auto & i : *buf )
-			//	i = dist(rd);
-
-			//cdc256 ctx256;
-			//ctx256.init();
-			//ctx256.update(*buf);
-			//auto digest256 = ctx256.final();
-
-			//cdc512 ctx512;
-			//ctx512.init();
-			//ctx512.update(*buf);
-			//auto digest512 = ctx512.final();
-
-			//m = m;
-
 			memset(r->data_, 0, (r->length_ + 2) * sizeof(word));
 			r->imul(b, i, m);
 		}, r, b.proxy_, i, m));
@@ -1200,8 +1243,11 @@ inline integer integer::operator * (const integer & v) const
 {
 	stat_imul_++;
 
-	if( proxy_->length_ > 16 && v.proxy_->length_ > 16 && thread_hardware_concurrency > 1 )
-		return tmul(v);
+	if( thread_hardware_concurrency > 1 && proxy_->length_ >= thread_hardware_concurrency ) {
+        if( proxy_->length_ <= 4096 )
+            return tmul_a<4096>(v);
+		return tmul_v(v);
+	}
 
 	integer a(abs()), b(v.abs());
 

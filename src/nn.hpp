@@ -882,7 +882,7 @@ inline std::ostream & operator << (std::ostream & out, const nn::numeric & v)
 			<< "/" << "x" << std::hex << v.denominator_;
 	}
 	else if( out.flags() & std::ios_base::dec ){
-		out << v.to_string(out.width(), out.precision());
+		out << v.to_string(uintptr_t(out.width()), uintptr_t(out.precision()));
 	}
 
 	return out;

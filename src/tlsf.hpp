@@ -1,7 +1,7 @@
 /*-
  * The MIT License (MIT)
  *
- * Copyright (c) 2014, 2015, 2016 Guram Duka
+ * Copyright (c) 2014, 2015, 2016, 2017 Guram Duka
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -305,13 +305,13 @@ class TLSF_Impl { // must be singleton
         void operator = (const TLSF_Impl &);
 	public:
 		~TLSF_Impl() {
-			assert( ref_count_.fetch_add(0) == 0 );
+			assert( ref_count_ == 0 );
 			assert( pools_ == nullptr );
 			assert( tlsf_ == nullptr );
 		}
 
 		TLSF_Impl() : ref_count_(0) {
-			assert( ref_count_.fetch_add(0) == 0 );
+			assert( ref_count_ == 0 );
 			assert( pools_ == nullptr );
 			assert( tlsf_ == nullptr );
 		}
@@ -320,7 +320,7 @@ class TLSF_Impl { // must be singleton
 		void * realloc(void * p, size_t sz);
 		void free(void * p);
 	protected:
-		std::atomic_uintptr_t ref_count_;
+		uintptr_t ref_count_;
 		pool_t * pools_ = nullptr;
 		tlsf_t tlsf_ = nullptr;
 
@@ -1028,7 +1028,7 @@ inline void * TLSF_Impl::malloc(size_t sz)
 		errno = ENOMEM;
 	}
 	else {
-		ref_count_.fetch_add(1);
+		ref_count_++;
 #if _DEBUG
 		memset(p, 0xCC, sz);
 #endif
@@ -1116,7 +1116,7 @@ inline void TLSF_Impl::free(void * p)
 #endif
 		}
 
-		if( ref_count_.fetch_sub(1) == 1 && tlsf_ != nullptr ){
+		if( --ref_count_ == 0 && tlsf_ != nullptr ){
 			while( pools > 0 ){
 				tlsf_remove_pool(tlsf_, pools_[pools]);
 #if defined(_INC_WINDOWS) && defined(_WIN32)
@@ -1149,6 +1149,28 @@ inline void TLSF_Impl::free(void * p)
 }
 //------------------------------------------------------------------------------
 } // namespace tlsf - Two Level Segregated Fit memory allocator
+//------------------------------------------------------------------------------
+/*extern "C" void __cdecl free(void *_Memory);
+extern "C" void * __cdecl calloc(size_t _NumOfElements,size_t _SizeOfElements);
+extern "C" void * __cdecl malloc(size_t _Size);
+extern "C" void * __cdecl realloc(void *_Memory,size_t _NewSize);
+extern "C" void * __cdecl _recalloc(void *_Memory,size_t _Count,size_t _Size);
+// Make sure that X86intrin.h doesn't produce here collisions.
+#if (!defined (_XMMINTRIN_H_INCLUDED) && !defined (_MM_MALLOC_H_INCLUDED)) || defined(_aligned_malloc)
+#pragma push_macro("_aligned_free")
+#pragma push_macro("_aligned_malloc")
+#undef _aligned_free
+#undef _aligned_malloc
+extern "C" void __cdecl _aligned_free(void *_Memory);
+extern "C" void * __cdecl _aligned_malloc(size_t _Size,size_t _Alignment);
+#pragma pop_macro("_aligned_free")
+#pragma pop_macro("_aligned_malloc")
+#endif
+extern "C" void * __cdecl _aligned_offset_malloc(size_t _Size,size_t _Alignment,size_t _Offset);
+extern "C" void * __cdecl _aligned_realloc(void *_Memory,size_t _Size,size_t _Alignment);
+extern "C" void * __cdecl _aligned_recalloc(void *_Memory,size_t _Count,size_t _Size,size_t _Alignment);
+extern "C" void * __cdecl _aligned_offset_realloc(void *_Memory,size_t _Size,size_t _Alignment,size_t _Offset);
+extern "C" void * __cdecl _aligned_offset_recalloc(void *_Memory,size_t _Count,size_t _Size,size_t _Alignment,size_t _Offset);*/
 //------------------------------------------------------------------------------
 #endif // TLSF_HPP_INCLUDED
 //------------------------------------------------------------------------------
