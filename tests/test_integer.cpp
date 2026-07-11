@@ -46,7 +46,7 @@ static void test_integer_arithmetic() {
     TEST("div", (a / b).to_string() == "33");
 
     nn::integer mod;
-    a.div(b, &mod);
+    a.divide(b, &mod);
     TEST("mod", mod.to_string() == "1");
 
     TEST("negate", (-a).to_string() == "-100");

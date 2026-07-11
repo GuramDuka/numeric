@@ -1,0 +1,242 @@
+{
+  "context_envelope": {
+    "meta": {
+      "plan_id": "cpp23-modernization",
+      "created_at": "2026-07-11T00:00:00Z",
+      "last_updated": "2026-07-11T00:00:00Z",
+      "version": 1
+    },
+    "tech_stack": [
+      {
+        "name": "C++",
+        "version": "23 (target) / 17 (minimum compat)",
+        "usage_context": "All source in headers; C++17 baseline features (std::index_sequence, std::shared_mutex); targeting C++23 via -std=c++23",
+        "config_files": ["CMakeLists.txt", "tests/CMakeLists.txt"]
+      },
+      {
+        "name": "CMake",
+        "version": "3.14+",
+        "usage_context": "Build system; interface library numeric-lib (header-only), 3 targets: numeric_demo, test_integer, test_numeric",
+        "config_files": ["CMakeLists.txt"]
+      },
+      {
+        "name": "g++",
+        "version": "14.3.1",
+        "usage_context": "Primary compiler; fully supports -std=c++23 with <print>, std::mdspan, #elifdef, if consteval, deducing this",
+        "config_files": []
+      }
+    ],
+    "conventions": [
+      "All code in headers — no .cpp except main.cpp and test files",
+      "Namespace nn (NaturalNumbers) for all library code",
+      "namespace tlsf for the TLSF allocator (completely separate from nn)",
+      "C++17 minimum; now targeting C++23",
+      "MIT license header in every file",
+      "TEST(name, expr) macro for unit tests (fprintf-based, not a framework)",
+      "Header-only globals (nn_izero, nn_ione, stat_* counters) — each test TU must be separate CMake target",
+      "normalize(how=3): bit1=trim trailing zero bits, bit2=GCD reduce"
+    ],
+    "constraints": {
+      "hard": [
+        "All code remains in headers — no .cpp files except main and tests",
+        "Must compile with -std=c++23 on g++ 14.3.1",
+        "Must pass all existing tests (test_integer, test_numeric) with zero behavioral changes",
+        "Thread pool is always-on when concurrency > 1",
+        "MIT license header must be preserved in every file",
+        "TLSF allocator must remain a singleton via TLSF_Impl"
+      ],
+      "soft": [
+        "Academic commentary is additive — no algorithm changes",
+        "Minimal diffs: prefer targeted edits over full rewrites",
+        "Keep #pragma GCC optimize guards around performance-critical sections (isal/isar)",
+        "Keep existing fast paths (small-integer special cases in operator*)"
+      ],
+      "compatibility": [
+        "C++17 minimum compatibility for downstream users (but build targets C++23)",
+        "Windows (MSVC, _WIN32) paths must still compile — guarded by #ifdef",
+        "Emscripten support via EMSCRIPTEN define",
+        "g++ and MSVC both supported for TLSF bitops"
+      ],
+      "security_requirements": []
+    },
+    "architecture_snapshot": {
+      "key_dirs": ["src/", "tests/", "build/"],
+      "patterns": [
+        "Header-only include DAG: tlsf.hpp → id.hpp → wk.hpp → ii.hpp → nn.hpp → main.cpp",
+        "Ref-counted bigint via nn_integer_data (proxy pattern with add_ref/release)",
+        "TLSF allocator singleton for bigint memory (custom malloc/free for fragmentation control)",
+        "Thread pool (ThreadPoolT) for parallel bigint multiplication",
+        "Rational arithmetic via integer numerator/denominator pairs",
+        "π via BBP formula (Bailey-Borwein-Plouffe) with iterative refinement",
+        "sin/cos/atan via Taylor series with factorial caching",
+        "sqrt via Newton's method (exact rational) — WARNING: fraction blowup"
+      ],
+      "key_components": [
+        {
+          "name": "TLSF_Impl",
+          "location": "src/tlsf.hpp",
+          "responsibility": ["O(1) memory allocator singleton for bigint data", "malloc/realloc/free with TLSF algorithm"]
+        },
+        {
+          "name": "nn_integer_data",
+          "location": "src/id.hpp",
+          "responsibility": ["Ref-counted bigint storage (word array + sign word)", "Arithmetic core (add/sub/shift/bit ops)", "Memory management via TLSF_Impl"]
+        },
+        {
+          "name": "ThreadPoolT",
+          "location": "src/wk.hpp",
+          "responsibility": ["Condition-variable-based thread pool", "Parallel task execution for bigint multiplication"]
+        },
+        {
+          "name": "integer",
+          "location": "src/ii.hpp",
+          "responsibility": ["User-facing arbitrary-precision integer", "Arithmetic: + - * / % << >> & | ^", "String conversion (base 8/10/16)", "GCD, LCM, pow, factorial", "Threaded multiplication for large operands"]
+        },
+        {
+          "name": "numeric",
+          "location": "src/nn.hpp",
+          "responsibility": ["User-facing arbitrary-precision rational", "Arithmetic: + - * / with normalization", "Trig: sin, cos, atan via Taylor series", "Root: sqrt via Newton, nth root via bisection", "π: BBP formula (pi_cont)", "String conversion with precision"]
+        }
+      ]
+    },
+    "research_digest": {
+      "relevant_files": [
+        {
+          "path": "src/tlsf.hpp",
+          "purpose": ["Custom memory allocator — TLSF algorithm implementation"],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/id.hpp",
+          "purpose": ["Bigint data core — word types, ref-counted storage, arithmetic primitives"],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/wk.hpp",
+          "purpose": ["Thread pool + cryptographic sponge (cdc256/cdc512)"],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/ii.hpp",
+          "purpose": ["Integer class — full arithmetic, string conversion, GCD/pow/factorial"],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/nn.hpp",
+          "purpose": ["Numeric class — rational arithmetic, trig, root, pi"],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/main.cpp",
+          "purpose": ["Benchmark/demo — sqrt(2), cube_root(2), sin(1), cos(1), pi computation"],
+          "confidence": 1.0
+        },
+        {
+          "path": "tests/test_integer.cpp",
+          "purpose": ["Integer unit tests: construct, arithmetic, comparison, bitops, pow/factorial, gcd/lcm, inc/dec"],
+          "confidence": 1.0
+        },
+        {
+          "path": "tests/test_numeric.cpp",
+          "purpose": ["Numeric unit tests: construct, arithmetic, comparison, abs/neg, pow, sqrt, trig, round, to_string, edge cases, pi"],
+          "confidence": 1.0
+        }
+      ],
+      "patterns_found": [
+        {
+          "name": "Header-only singleton via function-local static",
+          "category": "design pattern",
+          "confidence": 1.0,
+          "example_location": ["id.hpp:157-160 (static_allocator)", "tlsf.hpp:302-906 (TLSF_Impl singleton)"]
+        },
+        {
+          "name": "CRTP via this-> for dependent names",
+          "category": "design pattern",
+          "confidence": 0.7,
+          "example_location": ["ii.hpp (operator overloading returning integer/numeric)"]
+        },
+        {
+          "name": "Union type punning for dword access",
+          "category": "code smell / fix target",
+          "confidence": 1.0,
+          "example_location": ["id.hpp:849-852 (isal union)", "id.hpp:902-905 (isar union)", "ii.hpp:1106-1113 (commented-out mul union)"]
+        },
+        {
+          "name": "C-style casts throughout",
+          "category": "code smell / fix target",
+          "confidence": 1.0,
+          "example_location": ["Across all files — pointer arithmetic, type conversions"]
+        },
+        {
+          "name": "NULL used instead of nullptr",
+          "category": "code smell / fix target",
+          "confidence": 1.0,
+          "example_location": ["tlsf.hpp:915,920,927", "ii.hpp:290,870,1280", "nn.hpp:179,612"]
+        },
+        {
+          "name": "typedef struct pattern",
+          "category": "code smell / fix target",
+          "confidence": 1.0,
+          "example_location": ["tlsf.hpp:284-296 (block_header_t, control_t)", "id.hpp:113 (typedef class nn_integer_data)"]
+        }
+      ],
+      "gotchas": [
+        {
+          "text": "Newton fraction blowup: numeric::root(power=2, iter) creates million-bit integers at iter=20. Keep iter <= 12.",
+          "confidence": 1.0
+        },
+        {
+          "text": "Header-only globals cause linker errors if multiple TUs include id.hpp/ii.hpp. Each test must be separate CMake target.",
+          "confidence": 1.0
+        },
+        {
+          "text": "String constructor had negative bug: numeric(\"-3.14159\") gave -2.85841. Fixed by subtracting fraction when ipart.is_neg().",
+          "confidence": 1.0
+        },
+        {
+          "text": "integer + numeric converts numeric -> integer via truncation (numerator/denominator). Always wrap as numeric to stay rational.",
+          "confidence": 1.0
+        },
+        {
+          "text": "normalize(how=3): bit1=trim trailing zero bits, bit2=GCD reduce. normalize(1) skips GCD. normalize(3) after arithmetic.",
+          "confidence": 1.0
+        },
+        {
+          "text": "div() method on integer shadows std::div from <cstdlib> — rename needed.",
+          "confidence": 0.9
+        }
+      ]
+    },
+    "prior_decisions": [
+      {
+        "decision": "Keep C++17 as minimum compatibility baseline despite targeting C++23",
+        "rationale": ["Downstream users may not have C++23 compilers", "C++23 features are additive (guarded by __has_include/if consteval)"],
+        "confidence": 0.9
+      },
+      {
+        "decision": "Add but do not restructure — preserve all algorithm implementations",
+        "rationale": ["Academic commentary should explain, not change behavior", "Existing tests validate correctness; changing algorithms invalidates tests"],
+        "confidence": 1.0
+      },
+      {
+        "decision": "Use reinterpret_cast for pointer type-punning where std::bit_cast is insufficient (different pointer sizes)",
+        "rationale": ["std::bit_cast requires same size; word* vs dword* may differ", "reinterpret_cast followed by dereference is equivalent to current union behavior"],
+        "confidence": 0.8
+      }
+    ],
+    "reuse_notes": [
+      {
+        "path": "AGENTS.md",
+        "trust": "high"
+      },
+      {
+        "path": "CMakeLists.txt",
+        "trust": "high"
+      },
+      {
+        "path": "tests/CMakeLists.txt",
+        "trust": "high"
+      }
+    ]
+  }
+}

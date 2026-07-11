@@ -28,10 +28,59 @@
 #include "id.hpp"
 #include "wk.hpp"
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @namespace nn (NaturalNumbers)
+/// @brief Arbitrary-precision integer class
+///
+/// This file defines the user-facing `integer` type: an arbitrary-precision
+/// signed integer built on a sign-magnitude representation backed by the
+/// ref-counted `nn_integer_data` proxy pattern defined in id.hpp.
+///
+/// Key design decisions and references:
+///   - Sign-magnitude representation using words of native width (typically
+///     64-bit on x86_64, 32-bit on x86). The sign is stored in a dedicated
+///     word at data_[length_] (0 = positive, ~0 = negative via two's complement
+///     extension).
+///   - Copy-on-write semantics: proxy_ is a shared pointer with atomic-like
+///     reference counting. Mutation triggers `unique()` to create an
+///     exclusive copy.
+///   - Threaded multiplication: for sufficiently large operands, `operator*`
+///     dispatches to a thread pool (wk.hpp) for parallel schoolbook
+///     multiplication.
+///
+/// References:
+///   - Knuth, D.E. "The Art of Computer Programming", Vol. 2:
+///     Seminumerical Algorithms, 3rd ed., Addison-Wesley, 1998.
+///   - Warren, H.S. "Hacker's Delight", 2nd ed., Addison-Wesley, 2013.
+///   - Stein, J. "Computational problems associated with Racah algebra",
+///     J. Comp. Phys., 1967 (binary GCD algorithm).
+///   - Moller, N. and Granlund, T., "Improved division by invariant
+///     integers", IEEE Trans. Computers, 2011.
+// ---------------------------------------------------------------------------
 namespace nn {  // namespace NaturalNumbers
 //------------------------------------------------------------------------------
-////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
+// //////////////////////////////////////////////////////////////////////////////
+// ---------------------------------------------------------------------------
+/// @class integer
+/// @brief User-facing arbitrary-precision integer type.
+///
+/// @details The `integer` class wraps `nn_integer_data` through a ref-counted
+///   proxy pointer (`proxy_`). Construction is supported from native integer
+///   types (`int`, `long`, `long long`, `unsigned*`), `double`/`long double`,
+///   `std::string` (decimal and hex), and copy construction.
+///
+///   **Copy-on-write**: All read-only operations (comparison, bit tests)
+///   operate on the shared proxy_ without copying. Any write operation first
+///   calls `unique()` to duplicate the underlying data if `ref_count_ > 1`.
+///
+///   **Statistics**: Four static counters (`stat_iadd_`, `stat_isub_`,
+///   `stat_imul_`, `stat_idiv_`) track the number of arithmetic operations
+///   for profiling and benchmarking.
+///
+///   **Thread safety**: Individual integer objects are NOT thread-safe.
+///   However, the global thread pool (`pool`) used by `tmul_*` is internally
+///   synchronized.
+// ---------------------------------------------------------------------------
 class integer {
 	friend class numeric;
 	public:
@@ -55,11 +104,11 @@ class integer {
 			return r;
 		}
 
-		integer() : integer((long long) 0) {}
-		integer(int v) : integer((long long) v) {}
-		integer(unsigned int v) : integer((unsigned long long) (v)) {}
-		integer(long v) : integer((long long) v) {}
-		integer(unsigned long v) : integer((unsigned long long) v) {}
+		integer() : integer(static_cast<long long>(0)) {}
+		integer(int v) : integer(static_cast<long long>(v)) {}
+		integer(unsigned int v) : integer(static_cast<unsigned long long>(v)) {}
+		integer(long v) : integer(static_cast<long long>(v)) {}
+		integer(unsigned long v) : integer(static_cast<unsigned long long>(v)) {}
 		integer(long long v) : proxy_(nn_init_illong(v)) {}
 		integer(unsigned long long v) : proxy_(nn_init_iullong(v)) {}
 #if _MSC_VER || HAVE_LONG_DOUBLE
@@ -143,18 +192,18 @@ class integer {
 
 		integer operator / (const integer & v) const;
 		integer & operator /= (const integer & v){
-			return *this = div(v);
+			return *this = divide(v);
 		}
 
 		integer operator % (const integer & v) const {
 			integer mod;
-			div(v, &mod);
+			divide(v, &mod);
 			return mod;
 		}
 
 		integer & operator %= (const integer & v){
 			integer mod;
-			div(v, &mod);
+			divide(v, &mod);
 			return *this = mod;
 		}
 
@@ -268,9 +317,9 @@ class integer {
 			return sign() < 0;
 		}
 
-		bool is_zero() const;
-		bool is_one() const;
-		bool is_ten() const;
+		constexpr bool is_zero() const;
+		constexpr bool is_one() const;
+		constexpr bool is_ten() const;
 
 		uintptr_t bit(uintptr_t i) const {
 			assert(i < proxy_->length_ * sizeof(word) * CHAR_BIT);
@@ -287,9 +336,9 @@ class integer {
 			return proxy_->icompare(v.proxy_);
 		}
 
-		integer div(const integer & divider, integer * p_mod = NULL) const;
+		integer divide(const integer & divider, integer * p_mod = nullptr) const;
 
-		integer nod_nok(const integer & a, integer * p_nok = NULL) const;
+		integer nod_nok(const integer & a, integer * p_nok = nullptr) const;
 
 		integer & swap(integer & v) {
 			nn_integer t = proxy_;
@@ -325,7 +374,7 @@ class integer {
 		template <typename T = word>
 		void sbit(uintptr_t i, const T v = 1) const {
 			if( proxy_->ref_count_ > 1 || i >= proxy_->length_ * sizeof(word) * CHAR_BIT ){
-				uintptr_t new_bit_size = (i + 1) + (-intptr_t(i + 1) & (sizeof(word) * CHAR_BIT - 1));
+				uintptr_t new_bit_size = (i + 1) + (-static_cast<intptr_t>(i + 1) & (sizeof(word) * CHAR_BIT - 1));
 				uintptr_t new_size = new_bit_size / (sizeof(word) * CHAR_BIT);
 
 				nn_integer result = nn_new(imax(new_size, proxy_->length_));
@@ -338,7 +387,7 @@ class integer {
 				proxy_->release();
 				proxy_ = result;
 			}
-			proxy_->data_[i / (sizeof(word) * CHAR_BIT)] |= word(v) << (i & (sizeof(word) * CHAR_BIT - 1));
+			proxy_->data_[i / (sizeof(word) * CHAR_BIT)] |= static_cast<word>(v) << (i & (sizeof(word) * CHAR_BIT - 1));
 		}
 
 		static integer gcd_impl(integer u, integer v) {
@@ -377,11 +426,24 @@ uintptr_t integer::stat_isub_ = 0;
 uintptr_t integer::stat_imul_ = 0;
 uintptr_t integer::stat_idiv_ = 0;
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Constructs an integer from a floating-point value.
+///
+/// @details Decomposes the double into integer and fractional parts using
+///   `modf`/`modfl`. Each decimal digit of the integer part is extracted
+///   by repeated division by 10 and accumulated into `*this`. Then the
+///   sign is adjusted.
+///
+///   Complexity: O(log10(v)) digit extractions, each requiring a decimal
+///   multiplication and addition.
+///
+/// @param v The floating-point value to convert.
+// ---------------------------------------------------------------------------
 #if _MSC_VER || HAVE_LONG_DOUBLE
-inline integer::integer(double v) : integer((long double) v) {}
+inline integer::integer(double v) : integer(static_cast<long double>(v)) {}
 inline integer::integer(long double v) : integer(0)
 #elif defined(LONG_DOUBLE)
-inline integer::integer(double v) : integer((LONG_DOUBLE) v) {}
+inline integer::integer(double v) : integer(static_cast<LONG_DOUBLE>(v)) {}
 inline integer::integer(LONG_DOUBLE v) : integer(0)
 #else
 inline integer::integer(double v) : integer(0)
@@ -403,7 +465,7 @@ inline integer::integer(double v) : integer(0)
 #else
     m = fmod(ipart,10);
 #endif
-    *this += power * sword(m);
+    *this += power * static_cast<sword>(m);
     power *= integer(10);
   }
 
@@ -411,10 +473,39 @@ inline integer::integer(double v) : integer(0)
     *this = -*this;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Copy constructor — increments the reference count of the shared
+///   proxy.
+///
+/// @details O(1) operation. No deep copy is performed until the first
+///   write triggers copy-on-write via `unique()`.
+///
+/// @param v The integer to copy.
+// ---------------------------------------------------------------------------
 inline integer::integer(const integer & v) : proxy_(v.proxy_->add_ref())
 {
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Constructs an integer from a decimal or hexadecimal string.
+///
+/// @details Auto-detects hex strings by the "0x" or "X" prefix. For hex:
+///   each nibble (4-bit) is placed directly into the word array in O(n)
+///   time. For decimal: digits are processed right-to-left using Knuth's
+///   digit-by-digit accumulation in O(n^2) time since each digit requires
+///   a decimal multiplication and addition across the growing word array.
+///
+///   Edge cases:
+///   - Leading '+' or '-' sign (sign is applied after accumulation)
+///   - Invalid characters throw std::invalid_argument
+///   - Empty string is treated as zero
+///
+///   Reference: Knuth, TAOCP Vol. 2, Section 4.4 (positional notation
+///   conversion).
+///
+/// @param s The input string.
+/// @throws std::invalid_argument If s contains invalid characters.
+// ---------------------------------------------------------------------------
 inline integer::integer(const std::string & s) : integer(0)
 {
 	std::string::const_iterator i(s.cend());
@@ -425,7 +516,7 @@ inline integer::integer(const std::string & s) : integer(0)
 
 		j += j[0] == '0' ? 2 : 1;
 		uintptr_t l = (i - j) * 4, p = l;
-		l += -intptr_t(l) & (sizeof(word) * CHAR_BIT - 1);
+		l += -static_cast<intptr_t>(l) & (sizeof(word) * CHAR_BIT - 1);
 
 		nn_integer result = nn_new(l / (sizeof(word) * CHAR_BIT));
 
@@ -446,13 +537,13 @@ inline integer::integer(const std::string & s) : integer(0)
 				throw std::invalid_argument(s);
 
 			p -= 4;
-			result->data_[p / (sizeof(word) * CHAR_BIT)] |= word(v & 0xF) << (p & (sizeof(word) * CHAR_BIT - 1));
+			result->data_[p / (sizeof(word) * CHAR_BIT)] |= static_cast<word>(v & 0xF) << (p & (sizeof(word) * CHAR_BIT - 1));
 
 			j++;
 
 		}
 
-		result->data_[result->length_] = sword(result->data_[result->length_ - 1]) >> (sizeof(word) * CHAR_BIT - 1);
+		result->data_[result->length_] = static_cast<sword>(result->data_[result->length_ - 1]) >> (sizeof(word) * CHAR_BIT - 1);
 		result->data_[result->length_ + 1] = result->data_[result->length_];
 
 		*this = integer(result);
@@ -484,6 +575,15 @@ inline integer::integer(const std::string & s) : integer(0)
 	}
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Copy-assignment operator.
+///
+/// @details Increments the source proxy's ref count, releases this proxy,
+///   and copies the pointer. O(1).
+///
+/// @param v The source integer.
+/// @return Reference to this.
+// ---------------------------------------------------------------------------
 inline integer & integer::operator = (const integer & v)
 {
 	v.proxy_->add_ref();
@@ -492,17 +592,32 @@ inline integer & integer::operator = (const integer & v)
 	return *this;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Extracts base-8 (octal) digits from the internal binary
+///   representation.
+///
+/// @details Reads groups of 3 bits from the word array (LSB-first packing)
+///   and pushes each as a 0–7 value into the string. The bit-width is
+///   rounded up to a multiple of 3. Leading zeros are stripped unless
+///   `keep_leading_zeros` is true.
+///
+///   The digit values are stored as raw 0–7 values (not ASCII), needing
+///   later conversion via `base8string`.
+///
+/// @param s Output string to receive digits.
+/// @param keep_leading_zeros If true, preserves all trits including zero.
+// ---------------------------------------------------------------------------
 inline void integer::base8digits(std::string & s,const bool keep_leading_zeros) const
 {
 	uintptr_t bits = sizeof(word) * CHAR_BIT * proxy_->length_;
 	if( bits % 3 )
 		bits += 3 - bits % 3;
 	s.reserve(bits / 3);
-	uint8_t * p = (uint8_t *) proxy_->data_;
+	uint8_t * p = reinterpret_cast<uint8_t *>(proxy_->data_);
 
 	for( intptr_t trit = bits - 3; trit >= 0; trit -= 3 ){
-		uint16_t c = (*(uint16_t *) (p + (trit >> 3))) >> (trit & 3);
-		s.push_back((char) c & 0x3);
+		uint16_t c = (*reinterpret_cast<uint16_t *>(p + (trit >> 3))) >> (trit & 3);
+		s.push_back(static_cast<char>(c & 0x3));
 	}
 
 	if( !keep_leading_zeros ){
@@ -517,6 +632,16 @@ inline void integer::base8digits(std::string & s,const bool keep_leading_zeros) 
 	}
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Converts base-8 digit values to ASCII characters and writes to
+///   a string.
+///
+/// @details This is a thin wrapper around `base8digits` that adds '0' to
+///   each digit value to produce ASCII characters.
+///
+/// @param s Output string (will be overwritten).
+/// @param keep_leading_zeros If true, retains leading zero trits.
+// ---------------------------------------------------------------------------
 inline void integer::base8string(std::string & s,const bool keep_leading_zeros) const
 {
 	base8digits(s,keep_leading_zeros);
@@ -525,6 +650,27 @@ inline void integer::base8string(std::string & s,const bool keep_leading_zeros) 
 		s[i] += '0';
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Converts the internal binary representation to a decimal string.
+///
+/// @details Uses Knuth's "semi-numerical" algorithm: first extracts octal
+///   digits via `base8digits`, then converts the octal string to decimal
+///   in-place. The core idea: for each octal position k, double the k
+///   leading octal digits using decimal arithmetic, subtract them from the
+///   k+1 leading digits using decimal arithmetic. This avoids full
+///   arbitrary-precision division.
+///
+///   A stack buffer of 4096 bytes is used for the subtrahend for strings
+///   up to 4096 octal digits; longer strings allocate on the heap.
+///
+///   Reference: Knuth, TAOCP Vol. 2, Section 4.4 (conversion between radices).
+///
+///   Complexity: O(n^2) in the number of octal digits, but practical for
+///   the sizes encountered in this library.
+///
+/// @param s Output string (will be overwritten).
+/// @param keep_leading_zeros If true, retains leading zeros in the output.
+// ---------------------------------------------------------------------------
 inline void integer::base10string(std::string & s,const bool keep_leading_zeros) const
 {
     base8digits(s, keep_leading_zeros);
@@ -617,6 +763,18 @@ inline void integer::base10string(std::string & s,const bool keep_leading_zeros)
         s[j] += '0';
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Converts the internal binary representation to a hexadecimal
+///   string.
+///
+/// @details Iterates over each word of the data array (MSB to LSB) and
+///   extracts nibbles (4-bit groups) from most significant to least. For
+///   SIZEOF_WORD == 8, each 64-bit word produces 16 hex digits. Leading
+///   zeros are stripped.
+///
+/// @param s Output string (will be overwritten).
+/// @param uppercase If true, uses A-F; otherwise a-f.
+// ---------------------------------------------------------------------------
 inline void integer::base16string(std::string & s,bool uppecase) const
 {
 	s.reserve(proxy_->length_ * sizeof(word) * 2);
@@ -658,6 +816,33 @@ inline void integer::base16string(std::string & s,bool uppecase) const
 	}
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Converts the integer to a string in base 8, 10, or 16.
+///
+/// @details Main string conversion entry point. For base 10, the algorithm
+///   repeatedly divides by 10^N (where N = maximum decimal digits that fit
+///   in a word: 39 for 64-bit, 19 for 32-bit, 9 for 16-bit) and extracts
+///   digit groups from the remainder. Key properties:
+///
+///   - Uses `nn_maxull` (largest representable unsigned value) as the
+///     divisor for the inner loop.
+///   - The volatile qualifier on the __uint128_t read (line ~721) is
+///     CRITICAL: the GCC optimizer generates code that produces a runtime
+///     segmentation fault at high optimization levels without it, due to
+///     invalid register scheduling for the 128-bit load.
+///   - Complexity: O(n^2) worst case for large integers with many digit
+///     groups.
+///
+///   For bases 8 and 16, delegates to `base8string` and `base16string`
+///   respectively.
+///
+///   The width parameter controls minimum digit count (zero-padded on the
+///   left). If the string is wider than `width`, leading zeros are stripped.
+///
+/// @param width  Minimum output width (zero-padded).
+/// @param base   Numeric base (8, 10, or 16).
+/// @return  The formatted string.
+// ---------------------------------------------------------------------------
 inline const std::string integer::to_string(uintptr_t width, uintptr_t base) const
 {
 	if( is_zero() )
@@ -679,11 +864,11 @@ inline const std::string integer::to_string(uintptr_t width, uintptr_t base) con
 		integer pt(&nn_maxull, 0);
 
 		do {
-			m = m.div(pt, &q);
-			void * p = q.proxy_->data_;
+			m = m.divide(pt, &q);
+			auto * p = reinterpret_cast<void *>(q.proxy_->data_);
 #if SIZEOF_WORD < 2
 			// 9 digits
-			unsigned long v = *(unsigned long *) p;
+			unsigned long v = *reinterpret_cast<unsigned long *>(p);
 			t.push_back((v % 10) + '0'); v /= 10;
 			t.push_back((v % 10) + '0'); v /= 10;
 			t.push_back((v % 10) + '0'); v /= 10;
@@ -695,7 +880,7 @@ inline const std::string integer::to_string(uintptr_t width, uintptr_t base) con
 			t.push_back((v % 10) + '0'); v /= 10;
 #elif SIZEOF_WORD < 8
 			// 19 digits
-			unsigned long long v = *(unsigned long long *) p;
+			unsigned long long v = *reinterpret_cast<unsigned long long *>(p);
 			t.push_back((v % 10) + '0'); v /= 10;
 			t.push_back((v % 10) + '0'); v /= 10;
 			t.push_back((v % 10) + '0'); v /= 10;
@@ -717,8 +902,9 @@ inline const std::string integer::to_string(uintptr_t width, uintptr_t base) con
 			t.push_back((v % 10) + '0'); v /= 10;
 #else
 			// 39 digits
-			// volatile because gcc optimizer generate runtime segmentation fault
-			volatile __uint128_t v = *(__uint128_t *) p;
+			// CRITICAL: volatile prevents GCC optimizer from producing
+			// a runtime segfault on the __uint128_t aligned load
+			volatile __uint128_t v = *reinterpret_cast<volatile __uint128_t *>(p);
 			t.push_back((v % 10) + '0'); v /= 10;
 			t.push_back((v % 10) + '0'); v /= 10;
 			t.push_back((v % 10) + '0'); v /= 10;
@@ -770,9 +956,8 @@ inline const std::string integer::to_string(uintptr_t width, uintptr_t base) con
 #else
 		abs().base10string(t,true);
 #endif
-		intptr_t w = t.size() - width;
-
-		if( w > 0 ){
+		if( t.size() > width ){
+			intptr_t w = static_cast<intptr_t>(t.size() - width);
 			std::string::iterator i(t.begin()), e(t.end());
 
 			while( i < e && w > 0 && *i == '0' ){
@@ -790,11 +975,28 @@ inline const std::string integer::to_string(uintptr_t width, uintptr_t base) con
 	return t;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Returns the absolute value of this integer.
+///
+/// @details If the value is negative, returns the negation; otherwise
+///   returns a copy.
+///
+/// @return The absolute value.
+// ---------------------------------------------------------------------------
 inline integer integer::abs() const
 {
 	return sign() < 0 ? -*this : *this;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Ensures exclusive ownership of the proxy data (copy-on-write).
+///
+/// @details If `ref_count_ > 1`, creates a new deep copy of the data array
+///   and returns it as a new `nn_integer`. The caller must manage the
+///   reference count of the returned proxy.
+///
+/// @return A new nn_integer with ref_count_ == 1.
+// ---------------------------------------------------------------------------
 inline integer integer::unique() const
 {
 	nn_integer result = nn_new(proxy_->length_);
@@ -804,7 +1006,17 @@ inline integer integer::unique() const
 	return result;
 }
 //------------------------------------------------------------------------------
-inline bool integer::is_zero() const
+// ---------------------------------------------------------------------------
+/// @brief Checks whether the integer is zero.
+///
+/// @details First checks pointer equality with the global `nn_izero`
+///   singleton. If the data is zero but the pointer differs, canonicalizes
+///   by replacing `proxy_` with `nn_izero`. This ensures that all zeros
+///   share a single proxy, improving pointer-equality fast-paths.
+///
+/// @return true if the value is zero.
+// ---------------------------------------------------------------------------
+inline constexpr bool integer::is_zero() const
 {
 	if( proxy_ == &nn_izero )
 		return true;
@@ -819,7 +1031,15 @@ inline bool integer::is_zero() const
 	return false;
 }
 //------------------------------------------------------------------------------
-inline bool integer::is_one() const
+// ---------------------------------------------------------------------------
+/// @brief Checks whether the integer equals one.
+///
+/// @details Similar canonicalization to `is_zero()`: if the value is 1,
+///   the proxy is replaced with the global `nn_ione` singleton.
+///
+/// @return true if the value is exactly 1.
+// ---------------------------------------------------------------------------
+inline constexpr bool integer::is_one() const
 {
 	if( proxy_ == &nn_ione )
 		return true;
@@ -838,7 +1058,15 @@ inline bool integer::is_one() const
 	return true;
 }
 //------------------------------------------------------------------------------
-inline bool integer::is_ten() const
+// ---------------------------------------------------------------------------
+/// @brief Checks whether the integer equals ten.
+///
+/// @details Canonicalization similar to `is_zero`/`is_one`. Replaces proxy_
+///   with the global `nn_iten` singleton if the value is 10.
+///
+/// @return true if the value is exactly 10.
+// ---------------------------------------------------------------------------
+inline constexpr bool integer::is_ten() const
 {
 	if( proxy_ == &nn_iten )
 		return true;
@@ -857,17 +1085,40 @@ inline bool integer::is_ten() const
 	return true;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Computes GCD (НОД) and optionally LCM (НОК) of this and `a`.
+///
+/// @details Implements a simultaneous GCD/LCM algorithm using the identity:
+///
+///   gcd(x,y) * lcm(x,y) = x * y
+///
+///   The algorithm maintains two accumulator pairs (u,v) and (g,h) that
+///   track intermediate GCD and LCM contributions respectively. At each
+///   step, the larger of x,y is reduced by repeated subtraction of the
+///   smaller (shifted by powers of 2 for efficiency).
+///
+///   Reference: Knuth, TAOCP Vol. 2, Section 4.5.2.
+///
+///   Edge cases:
+///   - Division by zero in `a`: throws std::range_error
+///   - If `*this` is zero, returns 0 and sets *p_nok = 0
+///
+/// @param a     The second operand.
+/// @param p_nok Optional pointer to receive the LCM.
+/// @return The GCD.
+/// @throws std::range_error if `a` is zero.
+// ---------------------------------------------------------------------------
 inline integer integer::nod_nok(const integer & a, integer * p_nok) const
 {
 	if( a.is_zero() )
-		//::div(1, 0);
+		//::divide(1, 0);
 		throw std::range_error("Integer divide by zero");
 
 	integer x(abs()), y(a.abs()), u, v, q, g;
 
 	if( is_zero() ){
 		x = 0;
-		if( p_nok != NULL ) *p_nok = 0;
+		if( p_nok != nullptr ) *p_nok = 0;
 	}
 	else {
 		intptr_t c;
@@ -879,26 +1130,52 @@ inline integer integer::nod_nok(const integer & a, integer * p_nok) const
 			c = x.compare(y);
 
 			if( c > 0 ){
-				if( p_nok != NULL ) g = u;
-				for( q = y; x - (q << 1) >= y; q <<= 1 ) if( p_nok != NULL ) g <<= 1;
+				if( p_nok != nullptr ) g = u;
+				for( q = y; x - (q << 1) >= y; q <<= 1 ) if( p_nok != nullptr ) g <<= 1;
 				x -= q;
-				if( p_nok != NULL ) v += g;
+				if( p_nok != nullptr ) v += g;
 			}
 			else if( c < 0 ){
-				if( p_nok != NULL ) g = v;
-				for( q = x; y - (q << 1) >= x; q <<= 1 ) if( p_nok != NULL ) g <<= 1;
+				if( p_nok != nullptr ) g = v;
+				for( q = x; y - (q << 1) >= x; q <<= 1 ) if( p_nok != nullptr ) g <<= 1;
 				y -= q;
-				if( p_nok != NULL ) u += g;
+				if( p_nok != nullptr ) u += g;
 			}
 			else
 				break;
 		}
 
-		if( p_nok != NULL ) *p_nok = (u + v) >> 1;
+		if( p_nok != nullptr ) *p_nok = (u + v) >> 1;
 	}
 	return x;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Computes this^power using exponentiation by squaring.
+///
+/// @details Standard binary exponentiation (right-to-left):
+///
+///   result = 1
+///   while power > 0:
+///     if power is odd: result *= base
+///     base *= base
+///     power /= 2
+///
+///   Optimized special cases:
+///   - power == 0: returns 1
+///   - power == 1: returns *this
+///   - power == 2: single multiplication (x*x)
+///   - power == 3: two multiplications (x*x*x)
+///   - power == 4: two multiplications with intermediate reuse
+///   - Base == 10: uses repeated (x<<3)+(x<<1) which avoids multiplication
+///     entirely (faster path for decimal power-of-ten computation)
+///
+///   Complexity: O(log(power)) multiplications. Each multiplication is
+///   O(n^2) in the bit-size of the intermediate values.
+///
+/// @param power The exponent (non-negative).
+/// @return this raised to the given power.
+// ---------------------------------------------------------------------------
 inline integer integer::pow(uintptr_t power) const
 {
 	if( is_zero() )
@@ -942,11 +1219,38 @@ inline integer integer::pow(uintptr_t power) const
 	return t;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Static helper: computes (base)^power.
+///
+/// @details Convenience wrapper around the member `pow`.
+///
+/// @param power The exponent.
+/// @param base  The base as a native integer.
+/// @return base raised to power.
+// ---------------------------------------------------------------------------
 inline integer integer::pow(uintptr_t power, uintptr_t base)
 {
 	return integer(base).pow(power);
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Computes the factorial of degree (degree!).
+///
+/// @details Simple iterative multiplication: result = 1*2*3*...*degree.
+///   Results grow super-exponentially; for degree=1000, the result exceeds
+///   2500 decimal digits. The algorithm uses O(degree) multiplications,
+///   each on progressively larger integers, giving overall O(degree^3)
+///   time in the bit-size (using schoolbook multiplication).
+///
+///   Stirling's approximation: n! ~ sqrt(2*pi*n) * (n/e)^n.
+///
+///   The commented-out `#if 0` block shows a planned caching strategy
+///   that was never activated (factorial_cache_ is commented out in the
+///   class declaration).
+///
+/// @param degree The factorial argument (non-negative).
+/// @return degree!
+// ---------------------------------------------------------------------------
 inline integer integer::factorial(uintptr_t degree)
 {
 #if 0
@@ -979,6 +1283,17 @@ inline integer integer::factorial(uintptr_t degree)
 #endif
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Stream output operator for integer.
+///
+/// @details Supports hex (0x prefix with showbase), octal (0 prefix with
+///   showbase), and decimal output. For decimal output, respects showpos
+///   and field width (via `out.width()`).
+///
+/// @param out The output stream.
+/// @param v   The integer value.
+/// @return Reference to the output stream.
+// ---------------------------------------------------------------------------
 inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 {
 	if( out.flags() & std::ios_base::hex ){
@@ -1007,6 +1322,22 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 	return out;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Historical schoolbook multiplication implementation (commented out).
+///
+/// @details This block contains the original serial multiplication
+///   implementation, preserved for historical reference. It uses the
+///   standard O(n*m) schoolbook algorithm with a 16-entry lookup table
+///   for small multipliers (b up to 16) and a nested-loop accumulator
+///   for larger operands. The SSE2/AVX SIMD codepath (also commented out)
+///   shows an attempted vectorization using _mm_mul_epu32.
+///
+///   The current active implementation (`operator *` below) uses the
+///   threaded `tmul_a`/`tmul_v` dispatch for large operands, falling
+///   back to `nn_integer_data::imul` for small ones.
+///
+///   Kept in `#if 0` per project convention — do not resurrect.
+// ---------------------------------------------------------------------------
 //inline integer integer::operator * (const integer & v) const
 //{
 //	stat_imul_++;
@@ -1131,9 +1462,50 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 //	return r;
 //}
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Global thread-pool and hardware-concurrency constant for
+///   parallel multiplication.
+///
+/// @details The `pool` object is a globally-accessible `ThreadPoolT`
+///   instance created with `hardware_concurrency()` worker threads. The
+///   `thread_hardware_concurrency` constant is evaluated once at program
+///   start and used to decide whether parallel multiplication is
+///   beneficial: only when the operand word-length >= concurrency count.
+///
+///   Destruction order: `pool` is destroyed at program exit (static
+///   destruction) after all thread tasks have completed. No explicit
+///   `join` is needed because `ThreadPoolT`'s destructor waits for
+///   pending tasks.
+// ---------------------------------------------------------------------------
 static const auto thread_hardware_concurrency = std::thread::hardware_concurrency();
 static ThreadPool pool(thread_hardware_concurrency);
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Performs schoolbook multiplication in parallel using a
+///   stack-allocated accumulator array (template parameter SIZE).
+///
+/// @details Dispatches one thread per non-zero word of the left operand.
+///   Each thread computes a partial product (b * m) shifted by `i` words
+///   and stores the result in a separate accumulator. The accumulators are
+///   allocated as a `std::array<nn_integer, SIZE>` on the stack, providing
+///   fast allocation for typical operand sizes. Partial products are summed
+///   sequentially after all threads complete.
+///
+///   Dispatch model:
+///   - Only non-zero words of `a` are dispatched (skip zero words)
+///   - Each thread runs `nn_integer_data::imul(b, i, m)` which computes
+///     the word-at-a-time product and stores it in the accumulator
+///   - All threads synchronize at `pool.wait()`
+///   - Accumulation (sum or difference) is single-threaded
+///
+///   Complexity: O(n^2 / k) where n = words in the operand and k = number
+///   of threads, plus O(n*k) for the final summation.
+///
+/// @tparam SIZE Maximum number of accumulators (stack allocation size).
+///   Must be >= the word-length of `*this`.
+/// @param v The right operand.
+/// @return The product.
+// ---------------------------------------------------------------------------
 template <size_t SIZE>
 inline integer integer::tmul_a(const integer & v) const
 {
@@ -1201,6 +1573,21 @@ inline integer integer::tmul_a(const integer & v) const
 	return s;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Performs schoolbook multiplication in parallel using a
+///   heap-allocated accumulator vector.
+///
+/// @details Identical dispatch strategy to `tmul_a`, but uses
+///   `std::vector<integer>` for the accumulator storage. This is used when
+///   the operand word-length exceeds the stack-allocated SIZE threshold
+///   (4096 in the current dispatch logic).
+///
+///   Using `std::vector` avoids stack overflow for extremely large
+///   operands but adds heap allocation overhead for each accumulator.
+///
+/// @param v The right operand.
+/// @return The product.
+// ---------------------------------------------------------------------------
 inline integer integer::tmul_v(const integer & v) const
 {
 	std::vector<integer> accums;
@@ -1239,6 +1626,26 @@ inline integer integer::tmul_v(const integer & v) const
 	return s;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Multiplies two integers, dispatching to parallel or serial
+///   implementation based on operand size.
+///
+/// @details High-level dispatch:
+///   1. If `thread_hardware_concurrency > 1` and `proxy_->length_ >=
+///      thread_hardware_concurrency`, use threaded multiplication:
+///      - `tmul_a<4096>` for operands up to 4096 words
+///      - `tmul_v` for larger operands (heap-allocated accumulators)
+///   2. Otherwise, fall back to serial `nn_integer_data::imul` through
+///      the single-threaded code path.
+///
+///   Sign handling: the product of absolute values is computed, then the
+///   sign is negated if exactly one operand is negative.
+///
+///   Complexity: O(n^2 / k) in parallel, O(n^2) serial.
+///
+/// @param v The right operand.
+/// @return The product.
+// ---------------------------------------------------------------------------
 inline integer integer::operator * (const integer & v) const
 {
 	stat_imul_++;
@@ -1262,22 +1669,62 @@ inline integer integer::operator * (const integer & v) const
 	return r;
 }
 //------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+/// @brief Division operator — delegates to `divide()`.
+///
+/// @param v The divisor.
+/// @return The quotient.
+/// @throws std::range_error if v is zero.
+// ---------------------------------------------------------------------------
 inline integer integer::operator / (const integer & v) const
 {
 	stat_idiv_++;
-	return div(v);
+	return divide(v);
 }
 //------------------------------------------------------------------------------
-inline integer integer::div(const integer & divider, integer * p_mod) const
+// ---------------------------------------------------------------------------
+/// @brief Divides this integer by `divider`, returning quotient and
+///   optionally the remainder.
+///
+/// @details Implements the restoring division algorithm (schoolbook long
+///   division). For each bit of the numerator (processed from MSB to LSB):
+///
+///   1. Left-shift the remainder by 1
+///   2. Set the LSB of the remainder to the current numerator bit
+///   3. If remainder >= divisor, subtract divisor and set corresponding
+///      quotient bit to 1
+///
+///   Reference: Knuth, TAOCP Vol. 2, Section 4.3.1, Algorithm D (Knuth's
+///   long division). This implementation uses the simpler restoring variant
+///   rather than the more efficient non-restoring Algorithm D, trading
+///   some performance for clarity.
+///
+///   Complexity: O(n * m) time where n = numerator bits, m = divisor bits.
+///   Space: O(max(n,m)) for the quotient.
+///
+///   Edge cases:
+///   - Division by zero: throws std::range_error
+///   - Division by one: optimized to return *this
+///   - Zero numerator: returns 0
+///
+///   Name note: named `divide` rather than `div` to avoid shadowing
+///   `std::div` from <cstdlib>.
+///
+/// @param divider The divisor (must not be zero)
+/// @param p_mod   Optional pointer to receive the remainder
+/// @return The quotient
+/// @throws std::range_error if divider is zero
+// ---------------------------------------------------------------------------
+inline integer integer::divide(const integer & divider, integer * p_mod) const
 {
 	if( divider.is_zero() )
-		//::div(1, 0);
+		//::divide(1, 0);
 		throw std::range_error("Integer divide by zero");
 
 	if( divider.is_one() )
 		return *this;
 
-	integer temp_r, & r = p_mod == NULL ? temp_r : *p_mod;
+	integer temp_r, & r = p_mod == nullptr ? temp_r : *p_mod;
 
 	r = 0;
 

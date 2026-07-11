@@ -6,7 +6,7 @@ project(numeric
 )
 
 # ── C++ standard ──────────────────────────────────────────────────────────────
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -34,7 +34,7 @@ target_link_libraries(numeric-lib INTERFACE Threads::Threads)
 if(NUMERIC_BUILD_MAIN)
     add_executable(numeric_demo src/main.cpp)
     target_link_libraries(numeric_demo PRIVATE numeric-lib)
-    target_compile_features(numeric_demo PRIVATE cxx_std_17)
+    target_compile_features(numeric_demo PRIVATE cxx_std_23)
 endif()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

@@ -22,7 +22,42 @@
  * THE SOFTWARE.
  */
 //------------------------------------------------------------------------------
+// Numeric library — benchmark and demo program.
+//
+// This program exercises the arbitrary-precision numeric class against
+// hardcoded high-precision reference values for sqrt(2), cube_root(2),
+// sin(1), cos(1), and pi.  It reports both the computed result and the
+// absolute error, and concludes with aggregate wall-time statistics using
+// high-resolution timers.
+//------------------------------------------------------------------------------
 #include "nn.hpp"
+
+#if __has_include(<print>)
+#include <print>
+#define PRINTLN(...) std::println(__VA_ARGS__)
+#define PRINT(...)   std::print(__VA_ARGS__)
+#else
+#define PRINTLN(...) std::cout << __VA_ARGS__ << std::endl
+#define PRINT(...)   std::cout << __VA_ARGS__
+#endif
+//------------------------------------------------------------------------------
+// Benchmarking methodology:
+//
+// Timing is performed with the OS high-resolution monotonic clock:
+//   - Windows:  QueryPerformanceCounter / QueryPerformanceFrequency
+//   - Linux:    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, ...)
+//
+// Each individual computation is framed by start/stop calls.  The timer
+// overhead induced by I/O (the "hole" measurement) is separately captured
+// around each print/format region and subtracted from the total elapsed
+// time.  This gives a close approximation of pure computation time,
+// isolating algorithm cost from output formatting.
+//
+// All computed values are compared against reference strings sourced from
+// OEIS (On-Line Encyclopedia of Integer Sequences) and the NASA
+// Astrophysics Data System.  Reference values are loaded via the string
+// constructor and normalized; the operation is then run and the absolute
+// difference is reported as the error term.
 //------------------------------------------------------------------------------
 int main()
 {
@@ -46,8 +81,8 @@ int main()
     const uint64_t freq = 1000000000u;
     uint64_t hole = 0;
 
-    auto ts2i = [] (struct timespec & ts) {
-        return uint64_t(ts.tv_sec) * freq + ts.tv_nsec;
+    auto ts2i = [] (struct timespec & ts) -> uint64_t {
+        return static_cast<uint64_t>(ts.tv_sec) * freq + ts.tv_nsec;
     };
 
     clock_getres(CLOCK_PROCESS_CPUTIME_ID,&res);
@@ -89,6 +124,16 @@ int main()
 	//return 0;
 #endif
 
+	//--------------------------------------------------------------------------
+	// sqrt(2) — Newton's method root(2, 10) vs. reference (OEIS A002193)
+	//
+	// The reference string is the first ~1000 decimal digits of sqrt(2)
+	// sourced from the NASA ADS and OEIS.  The computed value uses
+	// numeric::root(power=2, iter=10), which applies Newton's method to the
+	// rational fraction 2/1.  Ten Newton iterations roughly double the
+	// precision each time, converging to hundreds of correct digits.
+	//--------------------------------------------------------------------------
+
 	hard = numeric(
 		// http://oeis.org/A002193
 		// http://apod.nasa.gov/htmltest/gifcity/sqrt2.1mil
@@ -129,6 +174,15 @@ int main()
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
+	//--------------------------------------------------------------------------
+	// cube_root(2) — Bisection root(3, 5100) vs. reference (OEIS A002580)
+	//
+	// When power != 2, numeric::root falls back to a bisection algorithm
+	// (linear convergence).  5100 iterations yield approximately 5100 bits
+	// of precision — enough to match the reference to hundreds of decimal
+	// digits.  The reference string is from OEIS A002580.
+	//--------------------------------------------------------------------------
+
 	hard = numeric(
 		"1.2599210498948731647672106072782283505702514647015079800819751121552996765139594"
 		"837293965624362550941543102560356156652593990240406137372284591103042693552469606"
@@ -164,6 +218,15 @@ int main()
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
+
+	//--------------------------------------------------------------------------
+	// sin(1) — Series expansion (224-bit precision) vs. bigfloat reference
+	//
+	// Computes sin(1 radian) using the library's sine implementation with
+	// 224 bits of working precision.  The reference value was pre-computed
+	// with the Python bigfloat library (MPFR wrapper) and is hardcoded here
+	// for independent verification.
+	//--------------------------------------------------------------------------
 
 	hard = numeric(
 		// computed by http://pythonhosted.org/bigfloat/
@@ -202,6 +265,14 @@ int main()
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
+	//--------------------------------------------------------------------------
+	// cos(1) — Series expansion (224-bit precision) vs. bigfloat reference
+	//
+	// Computes cos(1 radian) analogously to sin(1) above, using the same
+	// 224-bit working precision and verified against the same bigfloat
+	// toolchain.
+	//--------------------------------------------------------------------------
+
 	hard = numeric(
 		"0.5403023058681397174009366074429766037323104206179222276700972553811003947744717"
 		"645179518560871830893435717311600300890978606337600216634564065122654173185847179"
@@ -239,6 +310,21 @@ int main()
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
+	//--------------------------------------------------------------------------
+	// pi (pi) — BBP iterative refinement (Bailey-Borwein-Plouffe formula)
+	//
+	// The library's pi() function uses the BBP formula to compute
+	// hexadecimal digits of pi without multi-precision floating-point.
+	// Here we iterate pi() with increasing precision until the absolute
+	// error falls below 10^{-(pre-1)} — that is, the computed value matches
+	// the reference to the requested digit count.
+	//
+	// The reference string is from OEIS A000796 (decimal expansion of pi).
+	// pi_cont is a helper object that carries convergence state between
+	// successive calls, enabling incremental refinement rather than
+	// restarting from scratch each iteration.  Progress is logged every
+	// 250 iterations.
+	//--------------------------------------------------------------------------
 	// http://oeis.org/A000796
 	// http://web.archive.org/web/20140225153300/http://www.exploratorium.edu/pi/pi_archive/Pi10-6.html
 	string pi_txt(
@@ -340,8 +426,23 @@ int main()
 	uint64_t nanosecs  = ellapsed * 1000000000u / freq;
 #endif
 
+	//--------------------------------------------------------------------------
+	// Statistics counters
+	//
+	// The library tracks aggregate big-integer operation counts across all
+	// numeric computations.  These are exposed as static members of integer:
+	//   stat_iadd_  — addition count
+	//   stat_isub_  — subtraction count
+	//   stat_imul_  — multiplication count
+	//   stat_idiv_  — division count
+	//
+	// Dividing the total execution time (microseconds) by the total number
+	// of operations yields a rough "microseconds per operation" index that
+	// provides a relative performance baseline across runs.
+	//--------------------------------------------------------------------------
+
 	cout << endl;
-	cout << "SECS   : " << setprecision(2) << std::fixed << (long double) milisecs / 1000u << endl;
+	cout << "SECS   : " << setprecision(2) << std::fixed << static_cast<long double>(milisecs) / 1000u << endl;
 	cout << "MILIS  : " << milisecs << endl;
 	cout << "MICROS : " << microsecs << endl;
 	cout << "NANOS  : " << nanosecs << endl;

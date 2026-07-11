@@ -1,0 +1,503 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN METADATA
+# ═══════════════════════════════════════════════════════════════════════════
+plan_id: cpp23-modernization
+objective: "Modernize header-only C++ arbitrary-precision arithmetic library (Numeric) from C++17 to C++23: apply C++23 language features, fix code problems (C-casts, union type-punning, NULL→nullptr, typedef→using, div() shadowing), add academic commentary (Knuth refs, complexity notes, algorithm descriptions, pre/post conditions) to every function. Must preserve semantics and pass all existing tests."
+created_at: "2026-07-11T00:00:00Z"
+created_by: "gem-planner"
+status: pending
+tldr: >
+  Rewrite 10 files across 6 waves: CMake→C++23, then bottom-up through the
+  include DAG (tlsf→id→wk→ii→nn→main/tests), then build_verify. Each source
+  file gets: (1) C++23 mechanical changes, (2) code problem fixes, (3) academic
+  commentary blocks. Test files get minimal style updates. Build_verify compiles
+  and runs test_integer + test_numeric with ctest.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN-LEVEL METRICS
+# ═══════════════════════════════════════════════════════════════════════════
+plan_metrics:
+  wave_1_task_count: 4
+  total_dependencies: 15
+  risk_score: high
+quality_warnings:
+  - "Newton fraction blowup in nn.hpp root() — must keep iter≤12 guard, do not alter existing guard logic"
+  - "Header-only globals (nn_izero etc.) — linker errors if multi-TU. All source remains header-only; tests are separate CMake targets."
+  - "div() method on integer shadows std::div — rename to divide() to avoid ADL ambiguity"
+  - "Union type-punning in id.hpp isal/isar shared with dword* aliasing — must migrate to std::bit_cast without breaking shift semantics"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLANNING ANALYSIS (HIGH complexity)
+# ═══════════════════════════════════════════════════════════════════════════
+open_questions:
+  - question: "Should integer::div() be renamed to divide() to avoid std::div shadowing, or is internal use safe?"
+    context: "integer::div(divider, &mod) shadows std::div from <cstdlib>. All call sites are internal (ii.hpp, nn.hpp). Renaming is safer but touches ~10 call sites."
+    type: decision_blocker
+    affects: ["ii", "nn", "test_integer"]
+  - question: "How aggressive should std::bit_cast migration be in id.hpp isal/isar?"
+    context: "isal() and isar() use union { word* w; dword* d; } for aliasing. std::bit_cast requires same size — word* vs dword* are different pointer sizes on some archs. May need reinterpret_cast instead."
+    type: decision_blocker
+    affects: ["id"]
+  - question: "Should cout<< in main.cpp be replaced with std::print/println?"
+    context: "std::print is C++23 but g++ 14.3.1 supports it via <print>. Replacing all << chains would be a large diff. May limit to new code paths only."
+    type: decision_blocker
+    affects: ["main"]
+assumptions:
+  - "g++ 14.3.1 fully supports C++23 with -std=c++23 (verified via AGENTS.md build notes)"
+  - "All existing tests pass after each atomic file rewrite (no cross-file breakage expected from mechanical changes)"
+  - "Academic commentary adds no behavioral change — pure documentation blocks and inline comments"
+  - "Thread pool busy-wait pattern: current implementation uses condition_variable correctly; only the 'runs_' polling in wait() is minor busy-wait — acceptable for this scope"
+  - "constexpr allocator not required — TLSF uses runtime mmap/malloc; marking constexpr would force compile-time evaluation which is infeasible"
+
+pre_mortem:
+  overall_risk_level: high
+  critical_failure_modes:
+    - scenario: "C++23 std::print breaks on older g++ < 14 or non-Linux platforms"
+      likelihood: medium
+      impact: high
+      mitigation: "Conditionally guard std::print with __has_include(<print>); fallback to cout"
+    - scenario: "std::bit_cast of pointer unions in id.hpp causes undefined behavior or miscompilation"
+      likelihood: medium
+      impact: critical
+      mitigation: "Prefer memcpy-based type punning (std::bit_cast on trivially copyable) or reinterpret_cast where bit_cast is invalid; test shift operations with known values"
+    - scenario: "Renaming div() to divide() breaks a call site and test fails"
+      likelihood: low
+      impact: medium
+      mitigation: "Comprehensive grep for all div() calls before rename; build_verify catches failures"
+    - scenario: "Normalize(3) semantics broken by modernization — trailing-zero trim or GCD path altered"
+      likelihood: low
+      impact: critical
+      mitigation: "Keep normalize() logic identical; only add commentary. Verify with existing gcd/lcm tests."
+    - scenario: "Academic commentary bloats headers past compiler limits"
+      likelihood: low
+      impact: low
+      mitigation: "Keep commentary concise; compiler limits are far beyond these file sizes"
+
+coordination_notes:
+  - "WAVE ORDER: cmake→tlsf→id∥wk→ii→nn→main∥tests→build_verify. Strict include-DAG order."
+  - "Academic commentary is additive only — do not rewrite algorithms, only explain them."
+  - "C-cast migration: use static_cast for arithmetic casts, reinterpret_cast for pointer casts, const_cast only where necessary. Never use C-style (type)expr."
+  - "NULL→nullptr: every occurrence across all files. Use grep to find them all."
+  - "typedef struct X → struct X + using X = ... pattern. Do NOT break C-compatible layout."
+  - "Keep #pragma GCC push_options/pop_options around isal/isar in id.hpp — these are performance-critical."
+  - "test_integer and test_numeric: minimal changes — only C++23 style if it doesn't break the TEST macro."
+
+contracts:
+  - from_task: "tlsf"
+    to_task: "id"
+    interface: "tlsf::TLSF_Impl (singleton allocator with malloc/realloc/free)"
+    format: "Header-only; id.hpp #includes tlsf.hpp. TLSF_Impl API unchanged — only internal implementation modernized."
+  - from_task: "id"
+    to_task: "ii"
+    interface: "nn_integer_data class (ref-counted bigint core), nn_integer typedef, nn_new/nn_init_* helpers"
+    format: "Header-only; ii.hpp #includes id.hpp. nn_integer_data method signatures unchanged."
+  - from_task: "wk"
+    to_task: "ii"
+    interface: "ThreadPoolT<void()> aka ThreadPool — global instance 'pool' in ii.hpp"
+    format: "Header-only; ii.hpp #includes wk.hpp. ThreadPoolT API (run_task/wait) unchanged."
+  - from_task: "ii"
+    to_task: "nn"
+    interface: "integer class — all arithmetic/bitwise/string ops, gcd, pow, factorial"
+    format: "Header-only; nn.hpp #includes ii.hpp. integer method signatures unchanged."
+  - from_task: "nn"
+    to_task: "main"
+    interface: "numeric class + pi() function — all math ops, trig, root, pi computation"
+    format: "Header-only; main.cpp #includes nn.hpp. numeric API unchanged."
+  - from_task: "nn"
+    to_task: "test_integer"
+    interface: "integer class + TEST macro infrastructure"
+    format: "test_integer.cpp includes nn.hpp (which includes ii.hpp). All integer tests must pass identically."
+  - from_task: "nn"
+    to_task: "test_numeric"
+    interface: "numeric class + TEST_CLOSE macro"
+    format: "test_numeric.cpp includes nn.hpp. All numeric tests must pass identically."
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TASKS
+# ═══════════════════════════════════════════════════════════════════════════
+tasks:
+  # ───────────────────────────────────────────────────────────────────────
+  # WAVE 1: Build system + bottom-layer headers (no project deps)
+  # ───────────────────────────────────────────────────────────────────────
+  - id: cmake_root
+    title: "Update root CMakeLists.txt to C++23"
+    description: >
+      Change CMAKE_CXX_STANDARD from 17 to 23. Update target_compile_features
+      from cxx_std_17 to cxx_std_23. Add comment noting minimum CMake 3.20
+      recommended for C++23 support. Keep all other settings unchanged.
+    wave: 1
+    agent: gem-implementer
+    covers: ["CMake modernization", "build system"]
+    dependencies: []
+    context_files:
+      - path: CMakeLists.txt
+        description: "Root build file: 43 lines, change CXX_STANDARD 17→23, cxx_std_17→cxx_std_23"
+    acceptance_criteria:
+      - "AC1: CMakeLists.txt sets CMAKE_CXX_STANDARD 23"
+      - "AC2: target_compile_features uses cxx_std_23"
+      - "AC3: cmake --build succeeds after change"
+    success_criteria:
+      - "grep 'CMAKE_CXX_STANDARD 23' CMakeLists.txt"
+      - "grep 'cxx_std_23' CMakeLists.txt"
+      - "cmake -B build && cmake --build build succeeds"
+    tech_stack: ["CMake 3.14+", "C++23"]
+    handoff:
+      do_not_reinvestigate: ["existing option() calls", "find_package(Threads)", "add_library(numeric-lib INTERFACE)"]
+      required_test_first: "none — mechanical change"
+      target_files: ["CMakeLists.txt"]
+      minimal_change: "Only modify lines 9-11 (set CXX_STANDARD) and line 37 (compile_features)"
+      acceptance_checks: ["cmake -B build && cmake --build build"]
+
+  - id: cmake_tests
+    title: "Update tests/CMakeLists.txt to C++23"
+    description: >
+      Change cxx_std_17 to cxx_std_23 in both add_test entries.
+      Keep test structure identical.
+    wave: 1
+    agent: gem-implementer
+    covers: ["CMake modernization", "test build system"]
+    dependencies: []
+    context_files:
+      - path: tests/CMakeLists.txt
+        description: "Tests build file: 11 lines, change cxx_std_17→cxx_std_23 in 2 places"
+    acceptance_criteria:
+      - "AC4: tests/CMakeLists.txt uses cxx_std_23 for both test targets"
+    success_criteria:
+      - "grep 'cxx_std_23' tests/CMakeLists.txt | wc -l == 2"
+    tech_stack: ["CMake 3.14+", "C++23"]
+    handoff:
+      target_files: ["tests/CMakeLists.txt"]
+      minimal_change: "Only replace cxx_std_17 with cxx_std_23 in lines 4 and 10"
+      acceptance_checks: ["cmake -B build && cmake --build build"]
+
+  - id: tlsf
+    title: "Rewrite tlsf.hpp — C++23 modernization + academic commentary"
+    description: >
+      Modernize the TLSF memory allocator singleton (1176 lines):
+      (1) typedef struct block_header_t/control_t → struct + using aliases
+      (2) NULL → nullptr throughout (currently ~15 occurrences)
+      (3) C-style casts → static_cast/reinterpret_cast/const_cast
+      (4) Fix existing `#ifdef`/`#ifndef` to use C++23 `#elifdef`/`#elifndef` ONLY where preceded by bare `#ifdef X`/`#ifndef X` — NOT `#if defined(X)` blocks (which are already correct)
+      (5) Replace raw union in isal() with std::bit_cast or memcpy approach
+      (6) Add constexpr to pure computation helpers (tlsf_min, tlsf_max, etc.)
+      (7) Add academic commentary: TLSF algorithm description, O(1) proof sketch,
+          reference to Masmano et al. paper and http://tlsf.baisoku.org,
+          complexity notes on each major function, block_header_t layout docs,
+          preconditions/postconditions on malloc/realloc/free.
+    wave: 1
+    agent: gem-implementer
+    covers: ["TLSF allocator", "memory management", "C++23 modernization", "academic commentary"]
+    dependencies: ["cmake_root"]
+    context_files:
+      - path: src/tlsf.hpp
+        description: "1176 lines — TLSF allocator singleton, block management, malloc/realloc/free"
+    acceptance_criteria:
+      - "AC5: No C-style casts remain in tlsf.hpp"
+      - "AC6: No NULL remains — all replaced with nullptr"
+      - "AC7: typedef struct replaced with struct + using"
+      - "AC8: Every function has academic commentary: what, algorithm ref, complexity"
+      - "AC9: Compiles with -std=c++23 -Wall -Wextra without warnings"
+    success_criteria:
+      - "File compiles as part of numeric-lib (compile test via build)"
+      - "grep -Pn '\\(\\w+ ?\\*?\\)' tlsf.hpp | grep -vE '(static_cast|reinterpret_cast|const_cast|dynamic_cast|sizeof|decltype)' | wc -l == 0 (no C-casts)"
+      - "grep -c 'NULL' tlsf.hpp == 0"
+      - "grep -c 'typedef struct' tlsf.hpp == 0"
+    tech_stack: ["C++23", "TLSF algorithm"]
+    handoff:
+      do_not_reinvestigate: ["pool_size() constant (64MB)", "block_header_free_bit/prev_free_bit semantics", "tlsf_fls/tlsf_ffs platform-specific implementations"]
+      target_files: ["src/tlsf.hpp"]
+      minimal_change: "Preserve all algorithm logic; only modernize syntax + add commentary"
+      acceptance_checks: ["Build numeric_demo; verify test_integer and test_numeric still pass"]
+
+  - id: wk
+    title: "Rewrite wk.hpp — C++23 modernization + academic commentary"
+    description: >
+      Modernize the thread pool + cryptographic sponge header (339 lines):
+      (1) C-style casts → static_cast/reinterpret_cast (5-6 occurrences)
+      (2) Add academic commentary: ThreadPoolT design (worker thread pool with
+          condition-variable signaling), cdc256/cdc512 sponge construction
+          (reference to Guram Duka's CDC design), complexity of hash update O(n),
+          thread safety notes
+      (3) Document each struct/method with brief descriptions
+      (4) Add preconditions for run_task/wait (not thread-safe after wait)
+      (5) NULL→nullptr if any exist
+    wave: 1
+    agent: gem-implementer
+    covers: ["thread pool", "cryptographic sponge", "C++23 modernization", "academic commentary"]
+    dependencies: ["cmake_root"]
+    context_files:
+      - path: src/wk.hpp
+        description: "339 lines — ThreadPoolT template, cdc256, cdc512 sponge"
+    acceptance_criteria:
+      - "AC10: No C-style casts in wk.hpp"
+      - "AC11: Every struct/function has academic commentary"
+      - "AC12: Thread pool busy-wait noted in commentary but pattern unchanged"
+    success_criteria:
+      - "Compiles with -std=c++23 without warnings"
+      - "grep -Pn '\\(\\w+\\)' wk.hpp | grep -v 'static_cast|reinterpret_cast|const_cast|dynamic_cast' == 0 (no C-casts)"
+    tech_stack: ["C++23", "threading", "sponge hash"]
+    handoff:
+      do_not_reinvestigate: ["cdc256/cdc512 algorithm constants", "ThreadPoolT condition_variable mechanism"]
+      target_files: ["src/wk.hpp"]
+      minimal_change: "No behavioral changes; syntax modernization + commentary only"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # WAVE 2: id.hpp — depends on tlsf.hpp
+  # ───────────────────────────────────────────────────────────────────────
+  - id: id
+    title: "Rewrite id.hpp — C++23 modernization + academic commentary"
+    description: >
+      Modernize the big-integer data core (931 lines):
+      (1) typedef class nn_integer_data → struct + using
+      (2) C-style casts → static_cast/reinterpret_cast
+      (3) NULL → nullptr (in nn_new)
+      (4) Union type-punning in isal()/isar() (lines 849-852, 902-905)
+          → std::bit_cast or memcpy-based approach
+      (5) Signed/unsigned comparison fixes (intptr_t vs uintptr_t in isal/isar)
+      (6) Add academic commentary:
+          - Word-size detection and SIZEOF_WORD logic
+          - Ref-counted bigint representation (sign-magnitude with explicit sign word)
+          - Addition/subtraction algorithms (schoolbook O(n))
+          - Bit operations (O(n))
+          - count_trailing_zeros algorithm De Bruijn vs builtin
+          - Shift operations (isal/isar) with carry handling
+          - References to Knuth TAOCP Vol. 2 (Seminumerical Algorithms)
+          - Pre/post conditions on all arithmetic methods
+    wave: 2
+    agent: gem-implementer
+    covers: ["bigint core", "ref-counted data", "bit operations", "C++23 modernization", "academic commentary"]
+    dependencies: ["tlsf"]
+    context_files:
+      - path: src/id.hpp
+        description: "931 lines — nn_integer_data class, word typedefs, add/sub/shift/bit ops, hex conversion"
+    acceptance_criteria:
+      - "AC13: No C-style casts in id.hpp"
+      - "AC14: No NULL in id.hpp"
+      - "AC15: typedef class nn_integer_data → struct nn_integer_data + using"
+      - "AC16: Union type-punning in isal/isar replaced with safe alternative"
+      - "AC17: All functions have commentary including algorithm references"
+      - "AC18: Signed/unsigned mismatches fixed"
+    success_criteria:
+      - "Compiles with -std=c++23 -Wall -Wextra without warnings"
+      - "grep -c 'NULL' id.hpp == 0"
+      - "grep -c 'typedef class' id.hpp == 0"
+      - "Verify hex_char/hex_string constexpr correctness still works"
+    tech_stack: ["C++23", "bigint arithmetic", "Knuth TAOCP Vol. 2"]
+    handoff:
+      do_not_reinvestigate: ["SIZEOF_WORD detection logic", "nn_integer_data layout (ref_count_, length_, dummy_, data_[])", "nn_new allocator path", "hex_char/hex_string constexpr utilities"]
+      target_files: ["src/id.hpp"]
+      minimal_change: "Keep union→bit_cast or memcpy; do NOT change add/sub algorithm. Preserve #pragma GCC optimize around isal."
+
+  # ───────────────────────────────────────────────────────────────────────
+  # WAVE 3: ii.hpp — depends on id.hpp + wk.hpp
+  # ───────────────────────────────────────────────────────────────────────
+  - id: ii
+    title: "Rewrite ii.hpp — C++23 modernization + academic commentary"
+    description: >
+      Modernize the integer class (1320 lines):
+      (1) NULL → nullptr (div() method, nod_nok(), etc.)
+      (2) C-style casts → static_cast/reinterpret_cast
+      (3) div() method rename → divide() to avoid std::div shadowing
+          (update call sites in ii.hpp and nn.hpp)
+      (4) Union type-punning in commented-out multiplication (lines 1106-1113)
+      (5) Add academic commentary:
+          - integer class overview (ref-counted proxy pattern)
+          - String constructors (base detection, digit-by-digit parsing)
+          - base8/base10/base16 conversion algorithms
+          - Knuth's base-conversion algorithm (base8→base10 in base10string)
+          - Division algorithm (restoring division, O(n²))
+          - GCD via binary GCD algorithm (Stein's algorithm)
+          - Power via exponentiation by squaring O(log n)
+          - Factorial via iterative multiplication O(n)
+          - Threaded multiplication (tmul_a/tmul_v) with work distribution
+          - Statistics counters documentation
+          - Known pitfalls: Newton fraction blowup
+      (6) Fix signed/unsigned comparison warnings
+    wave: 3
+    agent: gem-implementer
+    covers: ["integer class", "arithmetic", "string conversion", "GCD/LCM", "threaded multiplication", "C++23 modernization", "academic commentary"]
+    dependencies: ["id", "wk"]
+    context_files:
+      - path: src/ii.hpp
+        description: "1320 lines — integer class: arithmetic, bitwise, string, gcd, pow, factorial"
+    acceptance_criteria:
+      - "AC19: No C-style casts in ii.hpp"
+      - "AC20: No NULL in ii.hpp"
+      - "AC21: div() renamed to divide() — all call sites updated in ii.hpp AND nn.hpp"
+      - "AC22: All functions have academic commentary with algorithm descriptions"
+      - "AC23: No new warnings from -Wall -Wextra -Wconversion (existing signed/unsigned issues noted)"
+    success_criteria:
+      - "Compiles with -std=c++23 without warnings"
+      - "grep -c 'NULL' ii.hpp == 0"
+      - "grep -c '\\bdiv(' ii.hpp == 0 (no bare div calls; exclude divide/divider manually)"
+    tech_stack: ["C++23", "bigint arithmetic", "Knuth TAOCP Vol. 2"]
+    handoff:
+      do_not_reinvestigate: ["thread_hardware_concurrency global", "pool global instance", "stat_iadd_ etc. statistics counters"]
+      required_test_first: "Build test_integer after ii.hpp changes to verify arithmetic"
+      target_files: ["src/ii.hpp"]
+      minimal_change: "Preserve operator* threaded dispatch logic; only rename div() calls"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # WAVE 4: nn.hpp — depends on ii.hpp
+  # ───────────────────────────────────────────────────────────────────────
+  - id: nn
+    title: "Rewrite nn.hpp — C++23 modernization + academic commentary"
+    description: >
+      Modernize the numeric class (977 lines):
+      (1) NULL → nullptr (mod(), operator<<, etc.)
+      (2) C-style casts → static_cast/reinterpret_cast
+      (3) Add academic commentary:
+          - numeric class overview (rational fraction = numerator/denominator)
+          - String constructor parsing algorithm
+          - Normalize semantics (bit 1=trim trailing zeros, bit 2=GCD reduce)
+          - Arithmetic via cross-multiplication
+          - Comparison via common denominator
+          - Taylor series for sin/cos (reference to Wikipedia/Madhava-Leibniz)
+          - Newton's method for sqrt (reference to Babylonian method)
+          - Bisection method for nth root
+          - BBP formula for π (Bailey-Borwein-Plouffe, 1997)
+          - Machin-like formula alternative
+          - Rounding modes (toLess/toGreater)
+          - Known pitfalls: Newton fraction blowup warning
+          - Pre/post conditions on all math functions
+      (4) Update div() → divide() calls in nn.hpp if ii.hpp div() is renamed
+    wave: 4
+    agent: gem-implementer
+    covers: ["numeric class", "rational arithmetic", "trig functions", "root finding", "pi computation", "C++23 modernization", "academic commentary"]
+    dependencies: ["ii"]
+    context_files:
+      - path: src/nn.hpp
+        description: "977 lines — numeric class: rational ops, sin/cos/atan/root/pow, π, rounding"
+    acceptance_criteria:
+      - "AC24: No C-style casts in nn.hpp"
+      - "AC25: No NULL in nn.hpp"
+      - "AC26: All functions have academic commentary with algorithm references"
+      - "AC27: Taylor series sin/cos documented with convergence notes"
+      - "AC28: Newton's method for sqrt has explicit fraction-blowup warning"
+      - "AC29: BBP pi formula documented with reference to Bailey et al."
+      - "AC30: normalize() semantics documented"
+      - "AC30b: Union type-punning in normalize() (union { const word* pw; const uint8_t* pb; }) migrated to reinterpret_cast — same technique as id.hpp isal/isar. Trailing-zero trimming logic UNCHANGED."
+    success_criteria:
+      - "Compiles with -std=c++23 without warnings"
+      - "grep -c 'NULL' nn.hpp == 0"
+      - "Verify test_numeric passes all tests (especially round, sqrt, trig)"
+    tech_stack: ["C++23", "rational arithmetic", "numerical methods", "BBP algorithm"]
+    handoff:
+      do_not_reinvestigate: ["pi_cont iteration formula", "normalize(3) semantics", "sin/cos Taylor series convergence characteristics"]
+      target_files: ["src/nn.hpp"]
+      minimal_change: "Do NOT alter root() Newton iteration limit — keep existing iter≤12 guard commentary"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # WAVE 5: main.cpp + test files — depend on nn.hpp
+  # ───────────────────────────────────────────────────────────────────────
+  - id: main
+    title: "Rewrite main.cpp — C++23 modernization + commentary"
+    description: >
+      Modernize the benchmark/demo program (354 lines):
+      (1) C-style casts → static_cast (especially around timespec conversions)
+      (2) NULL → nullptr if any
+      (3) Optionally use std::print/println for output (guard with
+          __has_include(<print>) for portability)
+      (4) Add commentary documenting benchmark methodology
+      (5) Keep timing infrastructure unchanged
+    wave: 5
+    agent: gem-implementer
+    covers: ["benchmark", "demo program", "C++23 modernization", "commentary"]
+    dependencies: ["nn"]
+    context_files:
+      - path: src/main.cpp
+        description: "354 lines — benchmark: sqrt(2), cube_root(2), sin(1), cos(1), pi computation"
+    acceptance_criteria:
+      - "AC31: No C-style casts in main.cpp"
+      - "AC32: Benchmark output unchanged (or improved via std::print)"
+    success_criteria:
+      - "Compiles with -std=c++23 without warnings"
+      - "numeric_demo runs without crash and produces recognizable benchmark output"
+    tech_stack: ["C++23", "benchmarking"]
+    handoff:
+      do_not_reinvestigate: ["timer infrastructure (clock_gettime/QueryPerformanceCounter)", "pi reference strings", "hardcoded expected values"]
+      target_files: ["src/main.cpp"]
+      minimal_change: "Do NOT change benchmark logic; only syntax + output formatting"
+
+  - id: test_integer
+    title: "Update test_integer.cpp — C++23 style"
+    description: >
+      Minimal modernization of integer unit tests (138 lines):
+      (1) NULL → nullptr if any
+      (2) Update fprintf → std::print if available
+      (3) Minor style fixes only
+      (4) Update div() call sites if renamed to divide()
+    wave: 5
+    agent: gem-implementer
+    covers: ["unit tests", "C++23 modernization"]
+    dependencies: ["nn"]
+    context_files:
+      - path: tests/test_integer.cpp
+        description: "138 lines — integer unit tests with custom TEST macro"
+    acceptance_criteria:
+      - "AC33: test_integer compiles and passes all tests"
+    success_criteria:
+      - "ctest --test-dir build -R test_integer passes"
+    tech_stack: ["C++23", "unit testing"]
+    handoff:
+      do_not_reinvestigate: ["TEST macro definition", "test function names", "hardcoded expected values"]
+      target_files: ["tests/test_integer.cpp"]
+      minimal_change: "Keep TEST macro fprintf-based for compatibility"
+
+  - id: test_numeric
+    title: "Update test_numeric.cpp — C++23 style"
+    description: >
+      Minimal modernization of numeric unit tests (198 lines):
+      (1) NULL → nullptr if any
+      (2) Update fprintf → std::print if available
+      (3) Minor style fixes only
+      (4) Update div() call sites if renamed to divide()
+    wave: 5
+    agent: gem-implementer
+    covers: ["unit tests", "C++23 modernization"]
+    dependencies: ["nn"]
+    context_files:
+      - path: tests/test_numeric.cpp
+        description: "198 lines — numeric unit tests with TEST and TEST_CLOSE macros"
+    acceptance_criteria:
+      - "AC34: test_numeric compiles and passes all tests"
+    success_criteria:
+      - "ctest --test-dir build -R test_numeric passes"
+    tech_stack: ["C++23", "unit testing"]
+    handoff:
+      do_not_reinvestigate: ["TEST_CLOSE macro", "test function names", "epsilon values for approximate comparisons"]
+      target_files: ["tests/test_numeric.cpp"]
+      minimal_change: "Keep TEST macro fprintf-based for compatibility"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # WAVE 6: Build + Test Verification
+  # ───────────────────────────────────────────────────────────────────────
+  - id: build_verify
+    title: "Full build + test verification"
+    description: >
+      Rebuild from clean cmake and run all tests:
+      1. rm -rf build && cmake -B build -DCMAKE_CXX_STANDARD=23
+      2. cmake --build build (capture any warnings)
+      3. ctest --test-dir build --timeout 30 (both test_integer and test_numeric)
+      4. Verify numeric_demo runs without crash
+      5. Report any failures or warnings
+    wave: 6
+    agent: gem-devops
+    covers: ["build verification", "test execution", "CI readiness"]
+    dependencies: ["cmake_root", "cmake_tests", "tlsf", "id", "wk", "ii", "nn", "main", "test_integer", "test_numeric"]
+    context_files:
+      - path: build/
+        description: "Build directory (rebuild from scratch)"
+    acceptance_criteria:
+      - "AC35: cmake --build succeeds with zero errors"
+      - "AC36: All ctest tests pass (test_integer + test_numeric)"
+      - "AC37: numeric_demo runs without crash or assertion failure"
+      - "AC38: No new compiler warnings beyond pre-existing ones"
+    environment: development
+    requires_approval: true
+    devops_security_sensitive: false
+    tech_stack: ["CMake", "C++23", "ctest", "g++ 14.3.1"]
+    handoff:
+      do_not_reinvestigate: ["Build output is final validation gate"]
+      target_files: []
+      acceptance_checks: ["ctest --test-dir build --output-on-failure"]
