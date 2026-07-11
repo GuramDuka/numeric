@@ -283,7 +283,10 @@ inline numeric::numeric(const std::string & s) : numeric(0)
 	if( s.end() - fp > 0 ){
 		denominator_ = integer(10).pow(s.end() - fp - 1);
 		numerator_ *= denominator_;
-		numerator_ += fraction;
+		if( ipart.is_neg() )
+			numerator_ -= fraction;
+		else
+			numerator_ += fraction;
 	}
 }
 //------------------------------------------------------------------------------
@@ -656,33 +659,24 @@ inline numeric numeric::pow(intptr_t power) const
 inline numeric numeric::round(uintptr_t digits, round_type type) const
 {
 	integer ipart, q, p(integer(10).pow(digits));
-	numeric fraction(mod(&ipart)), fq;
+	numeric fraction(mod(&ipart));
 
 	fraction *= p;
-	fq = fraction.mod(&q) * integer(10);
 
-	switch( type ){
-		case toLess:
-			if( q.is_neg() ){
-				if( q < -5 ) fraction += integer(-10) - q; else fraction -= q;
-			}
-			else {
-				if( q > 5 ) fraction += integer(10) - q; else fraction -= q;
-			}
-			break;
-		case toGreater:
-			if( q.is_neg() ){
-				if( q <= -5 ) fraction += integer(-10) - q; else fraction -= q;
-			}
-			else {
-				if( q >= 5 ) fraction += integer(10) - q; else fraction -= q;
-			}
-			break;
+	// q = integer part of shifted value (truncated toward zero)
+	// remainder = fractional part (may be negative)
+	numeric remainder = fraction.mod(&q);
+
+	// toLess  → round toward -infinity
+	// toGreater → round toward +infinity
+	if( !remainder.is_zero() ){
+		if( type == toLess && remainder.is_neg() )
+			q -= 1;   // negative remainder → go more negative
+		else if( type == toGreater && !remainder.is_neg() )
+			q += 1;   // positive remainder → go more positive
 	}
 
-	fraction /= p;
-
-	return ipart + fraction;
+	return numeric(ipart) + numeric(q, p);
 }
 //------------------------------------------------------------------------------
 inline numeric numeric::sin(uintptr_t iter) const
@@ -805,11 +799,21 @@ inline numeric numeric::root(uintptr_t power, uintptr_t iter) const
 	}
 	else if( power == 2 ){
 		// https://ru.wikipedia.org/wiki/Ряд_Тейлора
-		numeric x(r), hone(1, 2);
+		// Newton's method: x_{n+1} = 0.5 * (x_n + a/x_n)
+		// WARNING: exact rational Newton causes exponential fraction growth.
+		// Use modest iteration counts (<12) or switch to floating-point mode.
+		numeric x(r), prev_x, hone(1, 2);
 
 		for( uintptr_t n = 0; n < iter; n++ ){
+			prev_x = x;
 			x = hone * (x + (r / x));
 			x.normalize(3);
+			// Exact rational convergence check
+			if( x * x == r || x == prev_x )
+				break;
+			// Guard against fraction blowup: break when precision exceeds needed
+			if( x.to_string() == prev_x.to_string() )
+				break;
 		}
 
 		r = x;

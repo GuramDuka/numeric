@@ -31,6 +31,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <memory>
+#include <cstring>
 #include <condition_variable>
 //------------------------------------------------------------------------------
 namespace nn {  // namespace NaturalNumbers
