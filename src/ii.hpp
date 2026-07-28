@@ -618,7 +618,7 @@ inline void integer::base8digits(std::string & s,const bool keep_leading_zeros) 
 
 	for( intptr_t trit = bits - 3; trit >= 0; trit -= 3 ){
 		uint16_t c = (*reinterpret_cast<uint16_t *>(p + (trit >> 3))) >> (trit & 3);
-		s.push_back(static_cast<char>(c & 0x3));
+		s.push_back(static_cast<char>(c & 0x7));
 	}
 
 	if( !keep_leading_zeros ){
@@ -858,116 +858,19 @@ inline const std::string integer::to_string(uintptr_t width, uintptr_t base) con
 		abs().base16string(t,true);
 	}
 	else {
-#if 1
-		t.reserve(imax(((proxy_->length_ * sizeof(word)) * 2375) / 1000,width));
-
-		integer zero(0), m(abs()), q;
-		integer pt(&nn_maxull, 0);
-
+		integer m(abs());
+		if ( m.is_zero() )
+			return "0";
+		t.reserve(imax(((proxy_->length_ * sizeof(word)) * 2375) / 1000, width));
+		integer q;
+		integer ten(10);
 		do {
-			m = m.divide(pt, &q);
-			auto * p = reinterpret_cast<void *>(q.proxy_->data_);
-#if SIZEOF_WORD < 2
-			// 9 digits
-			unsigned long v = *reinterpret_cast<unsigned long *>(p);
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-#elif SIZEOF_WORD < 8
-			// 19 digits
-			unsigned long long v = *reinterpret_cast<unsigned long long *>(p);
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-#else
-			// 39 digits
-			// CRITICAL: volatile prevents GCC optimizer from producing
-			// a runtime segfault on the __uint128_t aligned load
-			volatile __uint128_t v = *reinterpret_cast<volatile __uint128_t *>(p);
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-			t.push_back((v % 10) + '0'); v /= 10;
-#endif
-
+			m = m.divide(ten, &q);
+			t.push_back(static_cast<char>(q.proxy_->data_[0] % 10) + '0');
 		} while( !m.is_zero() );
-
 		while( t.size() < width )
 			t.push_back('0');
-
-		std::reverse(t.begin(),t.end());
-		//t.erase();
-#else
-		abs().base10string(t,true);
-#endif
-		if( t.size() > width ){
-			intptr_t w = static_cast<intptr_t>(t.size() - width);
-			std::string::iterator i(t.begin()), e(t.end());
-
-			while( i < e && w > 0 && *i == '0' ){
-				w--;
-				i++;
-			}
-
-			t.erase(t.begin(), i);
-		}
+		std::reverse(t.begin(), t.end());
 	}
 
 	if( is_neg() )
