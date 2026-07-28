@@ -490,6 +490,40 @@ struct nn_integer_data {
             word s0 = d0[length_];
             word s1 = d1[p1->length_];
 
+#ifdef NN_HAVE_AVX2
+            while( r + 4 <= e ) {
+                __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d0));
+                __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d1));
+                __m256i vsum = _mm256_add_epi64(va, vb);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(r), vsum);
+
+                for( int i = 0; i < 4; ++i ) {
+                    word carry0 = r[i] < d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) + cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | carry0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 4; d1 += 4; r += 4;
+            }
+#elif defined(NN_HAVE_AVX)
+            while( r + 2 <= e ) {
+                __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d0));
+                __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d1));
+                __m128i vsum = _mm_add_epi64(va, vb);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(r), vsum);
+
+                for( int i = 0; i < 2; ++i ) {
+                    word carry0 = r[i] < d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) + cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | carry0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 2; d1 += 2; r += 2;
+            }
+#endif
+
             while( r < e ) {
                 q = static_cast<dword>(*d0++) + *d1++ + cf;
                 cf = static_cast<word>((q >> sizeof(word) * CHAR_BIT) & 1);
@@ -542,6 +576,40 @@ struct nn_integer_data {
             word s0 = d0[length_];
             word s1 = d1[p1->length_];
 
+#ifdef NN_HAVE_AVX2
+            while( r + 4 <= e ) {
+                __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d0));
+                __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d1));
+                __m256i vsum = _mm256_add_epi64(va, vb);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(r), vsum);
+
+                for( int i = 0; i < 4; ++i ) {
+                    word carry0 = r[i] < d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) + cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | carry0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 4; d1 += 4; r += 4;
+            }
+#elif defined(NN_HAVE_AVX)
+            while( r + 2 <= e ) {
+                __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d0));
+                __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d1));
+                __m128i vsum = _mm_add_epi64(va, vb);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(r), vsum);
+
+                for( int i = 0; i < 2; ++i ) {
+                    word carry0 = r[i] < d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) + cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | carry0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 2; d1 += 2; r += 2;
+            }
+#endif
+
             while( r < e ) {
                 q = static_cast<dword>(*d0++) + *d1++ + cf;
                 cf = static_cast<word>((q >> sizeof(word) * CHAR_BIT) & 1);
@@ -586,6 +654,40 @@ struct nn_integer_data {
             const word * d1 = p1->data_;
             word s0 = d0[length_];
             word s1 = d1[p1->length_];
+
+#ifdef NN_HAVE_AVX2
+            while( r + 4 <= e ) {
+                __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d0));
+                __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d1));
+                __m256i vsum = _mm256_add_epi64(va, vb);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(r), vsum);
+
+                for( int i = 0; i < 4; ++i ) {
+                    word carry0 = r[i] < d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) + cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | carry0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 4; d1 += 4; r += 4;
+            }
+#elif defined(NN_HAVE_AVX)
+            while( r + 2 <= e ) {
+                __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d0));
+                __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d1));
+                __m128i vsum = _mm_add_epi64(va, vb);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(r), vsum);
+
+                for( int i = 0; i < 2; ++i ) {
+                    word carry0 = r[i] < d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) + cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | carry0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 2; d1 += 2; r += 2;
+            }
+#endif
 
             while( r < e ) {
                 q = static_cast<dword>(*d0++) + *d1++ + cf;
@@ -648,6 +750,40 @@ struct nn_integer_data {
             word s0 = d0[length_];
             word s1 = d1[p1->length_];
 
+#ifdef NN_HAVE_AVX2
+            while( r + 4 <= e ) {
+                __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d0));
+                __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d1));
+                __m256i vdiff = _mm256_sub_epi64(va, vb);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(r), vdiff);
+
+                for( int i = 0; i < 4; ++i ) {
+                    word borrow0 = r[i] > d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) - cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | borrow0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 4; d1 += 4; r += 4;
+            }
+#elif defined(NN_HAVE_AVX)
+            while( r + 2 <= e ) {
+                __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d0));
+                __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d1));
+                __m128i vdiff = _mm_sub_epi64(va, vb);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(r), vdiff);
+
+                for( int i = 0; i < 2; ++i ) {
+                    word borrow0 = r[i] > d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) - cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | borrow0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 2; d1 += 2; r += 2;
+            }
+#endif
+
             while( r < e ) {
                 q = static_cast<dword>(*d0++) - *d1++ - cf;
                 cf = static_cast<word>((q >> sizeof(word) * CHAR_BIT) & 1);
@@ -698,6 +834,40 @@ struct nn_integer_data {
             word s0 = d0[length_];
             word s1 = d1[p1->length_];
 
+#ifdef NN_HAVE_AVX2
+            while( r + 4 <= e ) {
+                __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d0));
+                __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d1));
+                __m256i vdiff = _mm256_sub_epi64(va, vb);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(r), vdiff);
+
+                for( int i = 0; i < 4; ++i ) {
+                    word borrow0 = r[i] > d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) - cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | borrow0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 4; d1 += 4; r += 4;
+            }
+#elif defined(NN_HAVE_AVX)
+            while( r + 2 <= e ) {
+                __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d0));
+                __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d1));
+                __m128i vdiff = _mm_sub_epi64(va, vb);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(r), vdiff);
+
+                for( int i = 0; i < 2; ++i ) {
+                    word borrow0 = r[i] > d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) - cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | borrow0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 2; d1 += 2; r += 2;
+            }
+#endif
+
             while( r < e ) {
                 q = static_cast<dword>(*d0++) - *d1++ - cf;
                 cf = static_cast<word>((q >> sizeof(word) * CHAR_BIT) & 1);
@@ -742,6 +912,40 @@ struct nn_integer_data {
             const word * d1 = p1->data_;
             word s0 = d0[length_];
             word s1 = d1[p1->length_];
+
+#ifdef NN_HAVE_AVX2
+            while( r + 4 <= e ) {
+                __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d0));
+                __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d1));
+                __m256i vdiff = _mm256_sub_epi64(va, vb);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(r), vdiff);
+
+                for( int i = 0; i < 4; ++i ) {
+                    word borrow0 = r[i] > d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) - cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | borrow0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 4; d1 += 4; r += 4;
+            }
+#elif defined(NN_HAVE_AVX)
+            while( r + 2 <= e ) {
+                __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d0));
+                __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d1));
+                __m128i vdiff = _mm_sub_epi64(va, vb);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(r), vdiff);
+
+                for( int i = 0; i < 2; ++i ) {
+                    word borrow0 = r[i] > d0[i] ? 1 : 0;
+                    dword s = static_cast<dword>(r[i]) - cf;
+                    cf = ((s >> (sizeof(word) * CHAR_BIT)) != 0) | borrow0;
+                    r[i] = static_cast<word>(s);
+                }
+
+                d0 += 2; d1 += 2; r += 2;
+            }
+#endif
 
             while( r < e ) {
                 q = static_cast<dword>(*d0++) - *d1++ - cf;

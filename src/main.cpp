@@ -32,6 +32,15 @@
 //------------------------------------------------------------------------------
 #include "nn.hpp"
 
+#include <vector>
+#include <string>
+#include <fstream>
+#include <map>
+#include <iomanip>
+#include <cstdlib>
+#include <cstring>
+#include <sstream>
+
 #if __has_include(<print>)
 #include <print>
 #define PRINTLN(...) std::println(__VA_ARGS__)
@@ -40,6 +49,44 @@
 #define PRINTLN(...) std::cout << __VA_ARGS__ << std::endl
 #define PRINT(...)   std::cout << __VA_ARGS__
 #endif
+
+//------------------------------------------------------------------------------
+// Multi-variant benchmark types
+//------------------------------------------------------------------------------
+struct BenchmarkResult {
+    std::string name;
+    uint64_t nanos;
+};
+
+using BaselineVariant = std::map<std::string, uint64_t>;
+using BaselineData = std::map<std::string, BaselineVariant>;
+
+static BaselineData read_baseline(const std::string& path) {
+    BaselineData data;
+    std::ifstream f(path);
+    if (!f.is_open()) return data;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream iss(line);
+        std::string variant, bench;
+        uint64_t nanos;
+        if (iss >> variant >> bench >> nanos) {
+            data[variant][bench] = nanos;
+        }
+    }
+    return data;
+}
+
+static void write_baseline(const std::string& path, const BaselineData& data) {
+    std::ofstream f(path);
+    if (!f.is_open()) return;
+    for (const auto& [variant, benches] : data) {
+        for (const auto& [bench, nanos] : benches) {
+            f << variant << " " << bench << " " << nanos << "\n";
+        }
+    }
+}
 //------------------------------------------------------------------------------
 // Benchmarking methodology:
 //
@@ -59,12 +106,26 @@
 // constructor and normalized; the operation is then run and the absolute
 // difference is reported as the error term.
 //------------------------------------------------------------------------------
-int main()
+int main(int argc, char *argv[])
 {
 	using namespace std;
 	using namespace nn;
 
+	bool update_baseline = false;
+	bool benchmark_json = false;
+	string variant_name = "default";
+	string baseline_variant = "no_avx_no_threads";
+
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--update-baseline") == 0) update_baseline = true;
+		else if (strcmp(argv[i], "--benchmark-json") == 0) benchmark_json = true;
+		else if (strncmp(argv[i], "--variant=", 10) == 0) variant_name = argv[i] + 10;
+		else if (strncmp(argv[i], "--baseline-variant=", 19) == 0) baseline_variant = argv[i] + 19;
+	}
+
 	cout.precision(120);
+
+	vector<BenchmarkResult> results;
 
 #if _WIN32
 	//SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
@@ -134,6 +195,15 @@ int main()
 	// precision each time, converging to hundreds of correct digits.
 	//--------------------------------------------------------------------------
 
+	{
+#if _WIN32
+	LARGE_INTEGER bench_sqrt_start, bench_sqrt_stop;
+	QueryPerformanceCounter(&bench_sqrt_start);
+#else
+	struct timespec bench_sqrt_start, bench_sqrt_stop;
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_sqrt_start);
+#endif
+
 	hard = numeric(
 		// http://oeis.org/A002193
 		// http://apod.nasa.gov/htmltest/gifcity/sqrt2.1mil
@@ -170,9 +240,18 @@ int main()
 	QueryPerformanceCounter(&stop);
 	hole.QuadPart += stop.QuadPart - hole_start.QuadPart;
 #else
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&stop);
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
+
+#if _WIN32
+	QueryPerformanceCounter(&bench_sqrt_stop);
+	results.push_back({"sqrt(2)", (uint64_t)((bench_sqrt_stop.QuadPart - bench_sqrt_start.QuadPart) * 1000000000u / freq.QuadPart)});
+#else
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_sqrt_stop);
+	results.push_back({"sqrt(2)", ts2i(bench_sqrt_stop) - ts2i(bench_sqrt_start)});
+#endif
+	}
 
 	//--------------------------------------------------------------------------
 	// cube_root(2) — Bisection root(3, 5100) vs. reference (OEIS A002580)
@@ -182,6 +261,15 @@ int main()
 	// of precision — enough to match the reference to hundreds of decimal
 	// digits.  The reference string is from OEIS A002580.
 	//--------------------------------------------------------------------------
+
+	{
+#if _WIN32
+	LARGE_INTEGER bench_cube_start, bench_cube_stop;
+	QueryPerformanceCounter(&bench_cube_start);
+#else
+	struct timespec bench_cube_start, bench_cube_stop;
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_cube_start);
+#endif
 
 	hard = numeric(
 		"1.2599210498948731647672106072782283505702514647015079800819751121552996765139594"
@@ -219,6 +307,15 @@ int main()
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
+#if _WIN32
+	QueryPerformanceCounter(&bench_cube_stop);
+	results.push_back({"cube_root(2)", (uint64_t)((bench_cube_stop.QuadPart - bench_cube_start.QuadPart) * 1000000000u / freq.QuadPart)});
+#else
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_cube_stop);
+	results.push_back({"cube_root(2)", ts2i(bench_cube_stop) - ts2i(bench_cube_start)});
+#endif
+	}
+
 	//--------------------------------------------------------------------------
 	// sin(1) — Series expansion (224-bit precision) vs. bigfloat reference
 	//
@@ -227,6 +324,15 @@ int main()
 	// with the Python bigfloat library (MPFR wrapper) and is hardcoded here
 	// for independent verification.
 	//--------------------------------------------------------------------------
+
+	{
+#if _WIN32
+	LARGE_INTEGER bench_sin_start, bench_sin_stop;
+	QueryPerformanceCounter(&bench_sin_start);
+#else
+	struct timespec bench_sin_start, bench_sin_stop;
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_sin_start);
+#endif
 
 	hard = numeric(
 		// computed by http://pythonhosted.org/bigfloat/
@@ -265,6 +371,15 @@ int main()
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
+#if _WIN32
+	QueryPerformanceCounter(&bench_sin_stop);
+	results.push_back({"sin(1)", (uint64_t)((bench_sin_stop.QuadPart - bench_sin_start.QuadPart) * 1000000000u / freq.QuadPart)});
+#else
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_sin_stop);
+	results.push_back({"sin(1)", ts2i(bench_sin_stop) - ts2i(bench_sin_start)});
+#endif
+	}
+
 	//--------------------------------------------------------------------------
 	// cos(1) — Series expansion (224-bit precision) vs. bigfloat reference
 	//
@@ -272,6 +387,15 @@ int main()
 	// 224-bit working precision and verified against the same bigfloat
 	// toolchain.
 	//--------------------------------------------------------------------------
+
+	{
+#if _WIN32
+	LARGE_INTEGER bench_cos_start, bench_cos_stop;
+	QueryPerformanceCounter(&bench_cos_start);
+#else
+	struct timespec bench_cos_start, bench_cos_stop;
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_cos_start);
+#endif
 
 	hard = numeric(
 		"0.5403023058681397174009366074429766037323104206179222276700972553811003947744717"
@@ -310,6 +434,15 @@ int main()
     hole += ts2i(stop) - ts2i(hole_start);
 #endif
 
+#if _WIN32
+	QueryPerformanceCounter(&bench_cos_stop);
+	results.push_back({"cos(1)", (uint64_t)((bench_cos_stop.QuadPart - bench_cos_start.QuadPart) * 1000000000u / freq.QuadPart)});
+#else
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_cos_stop);
+	results.push_back({"cos(1)", ts2i(bench_cos_stop) - ts2i(bench_cos_start)});
+#endif
+	}
+
 	//--------------------------------------------------------------------------
 	// pi (pi) — BBP iterative refinement (Bailey-Borwein-Plouffe formula)
 	//
@@ -327,6 +460,16 @@ int main()
 	//--------------------------------------------------------------------------
 	// http://oeis.org/A000796
 	// http://web.archive.org/web/20140225153300/http://www.exploratorium.edu/pi/pi_archive/Pi10-6.html
+
+	{
+#if _WIN32
+	LARGE_INTEGER bench_pi_start, bench_pi_stop;
+	QueryPerformanceCounter(&bench_pi_start);
+#else
+	struct timespec bench_pi_start, bench_pi_stop;
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_pi_start);
+#endif
+
 	string pi_txt(
 		"3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679"
 		"8214808651328230664709384460955058223172535940812848111745028410270193852110555964462294895493038196"
@@ -410,6 +553,15 @@ int main()
 #endif
 
 #if _WIN32
+	QueryPerformanceCounter(&bench_pi_stop);
+	results.push_back({"pi", (uint64_t)((bench_pi_stop.QuadPart - bench_pi_start.QuadPart) * 1000000000u / freq.QuadPart)});
+#else
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &bench_pi_stop);
+	results.push_back({"pi", ts2i(bench_pi_stop) - ts2i(bench_pi_start)});
+#endif
+	}
+
+#if _WIN32
 	QueryPerformanceCounter(&stop);
 
 	uint64_t ellapsed  = stop.QuadPart - start.QuadPart - hole.QuadPart;
@@ -449,6 +601,61 @@ int main()
 	cout << "INDEX  : " <<
 		microsecs / (integer::stat_iadd_ + integer::stat_isub_ + integer::stat_imul_ + integer::stat_idiv_)
 		<< endl;
+
+	// --- Multi-variant comparison table ---
+	auto baseline = read_baseline("benchmark_baseline.json");
+	baseline[variant_name] = {};
+	for (const auto& r : results)
+		baseline[variant_name][r.name] = r.nanos;
+
+	if (update_baseline) {
+		write_baseline("benchmark_baseline.json", baseline);
+		cout << "Updated benchmark_baseline.json" << endl;
+	}
+
+	// Print comparison table
+	vector<string> variants;
+	variants.push_back(baseline_variant);
+	for (const auto& [v, _] : baseline)
+		if (v != baseline_variant) variants.push_back(v);
+
+	constexpr int col_w = 16;
+	cout << endl << left
+		  << setw(24) << "Benchmark"
+		  << setw(col_w) << (baseline_variant + "(ms)");
+	for (size_t vi = 1; vi < variants.size(); vi++) {
+		cout << setw(col_w) << (variants[vi] + "(ms)")
+			  << setw(12) << "Delta%";
+	}
+	cout << endl;
+	cout << string(24 + col_w + (variants.size()-1)*(col_w+12), '-') << endl;
+
+	for (const auto& r : results) {
+		auto base_it = baseline[baseline_variant].find(r.name);
+		double base_ns = (base_it != baseline[baseline_variant].end()) ? (double)base_it->second : 1.0;
+		cout << left << setw(24) << r.name
+			  << right << setw(col_w) << fixed << setprecision(3) << (base_ns / 1e6);
+		for (size_t vi = 1; vi < variants.size(); vi++) {
+			auto vit = baseline[variants[vi]].find(r.name);
+			double v_ns = (vit != baseline[variants[vi]].end()) ? (double)vit->second : 0.0;
+			double delta = (v_ns - base_ns) / base_ns * 100.0;
+			cout << right << setw(col_w) << fixed << setprecision(3) << (v_ns / 1e6)
+				  << right << setw(11) << fixed << setprecision(2) << delta << "%";
+		}
+		cout << endl;
+	}
+
+	if (benchmark_json) {
+		cout << endl << "=== BENCHMARK JSON ===" << endl;
+		cout << "{\"variant\":\"" << variant_name << "\",\"results\":[";
+		bool first = true;
+		for (const auto& r : results) {
+			if (!first) cout << ",";
+			first = false;
+			cout << "{\"name\":\"" << r.name << "\",\"nanos\":" << r.nanos << "}";
+		}
+		cout << "]}" << endl;
+	}
 
 	return 0;
 }

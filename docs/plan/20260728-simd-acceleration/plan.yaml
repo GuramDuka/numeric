@@ -1,0 +1,370 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN METADATA
+# ═══════════════════════════════════════════════════════════════════════════
+plan_id: 20260728-simd-acceleration
+objective: >-
+  Add AVX (128-bit) and AVX2 (256-bit) SIMD-accelerated variants of the
+  big-integer add/sub hot loops in id.hpp, create separate CMake targets
+  compiled with -mavx/-mavx2 flags, and run all four variants
+  (no_avx_no_threads, with_threads, avx, avx2) in the multi-column
+  comparison table.
+created_at: "2026-07-28T00:00:00Z"
+created_by: gem-planner
+status: pending
+tldr: |
+  Add AVX/AVX2-guarded SIMD alternatives to addz/addp/addm/subz/subp/subm
+  in id.hpp (vectorized + scalar carry resolution pattern). Create
+  numeric_demo_avx / numeric_demo_avx2 CMake targets with -mavx/-mavx2
+  and -DNN_HAVE_AVX/-DNN_HAVE_AVX2. Build all 4 variants, update
+  benchmark_baseline.json with avx and avx2 entries, verify 4-column table.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN-LEVEL METRICS
+# ═══════════════════════════════════════════════════════════════════════════
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 2
+  risk_score: medium
+quality_warnings:
+  - "SIMD carry/borrow propagation is the main correctness risk — must be bit-identical to scalar"
+  - "AVX2 256-bit path may cause throttling on some Intel CPUs (frequency transition)"
+  - "CPU feature detection at CMake time (no runtime dispatch) — binary crashes on unsupported CPUs"
+  - "immintrin.h already included via tlsf.hpp — no new #include needed"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLANNING ANALYSIS (MEDIUM complexity)
+# ═══════════════════════════════════════════════════════════════════════════
+open_questions:
+  - question: >-
+      Should the scalar remain as fallback when array length < SIMD vector
+      width (e.g., 3 words for AVX2), or should we unconditionally SIMD the
+      first floor(N/4) chunks and scalar the remainder?
+    context: >-
+      The Phase 1 loop has a variable iteration count based on overlap length.
+      For short arrays (e.g. length < 4), a fully scalar loop is simpler and
+      avoids misaligned SIMD loads. The natural approach: SIMD-chunk only
+      iterations >= vector width, finish with scalar.
+    type: decision_blocker
+    affects:
+      - simd_add_sub_loops
+  - question: >-
+      Do we need a separate CMake check for AVX/AVX2 CPU support, or just
+      rely on the compiler accepting -mavx2?
+    context: >-
+      -mavx2 tells the compiler to emit VEX-encoded instructions, but the
+      binary will SIGILL on CPUs without AVX2 support. CMake can check via
+      check_cxx_source_compiles with an __AVX2__ test. This project targets
+      modern x86_64 so the risk is low, but a build-time guard prevents
+      silent failures on CI runners.
+    type: decision_blocker
+    affects:
+      - cmake_avx_targets
+  - question: >-
+      Should we handle the SIMD memory alignment requirement? __m256i
+      requires 32-byte alignment. data_ is allocated via TLSF which may not
+      guarantee 32-byte alignment.
+    context: >-
+      The TLSF allocator in tlsf.hpp may return 16-byte aligned pointers.
+      Using _mm256_load_si128 (aligned) could crash. Options: use
+      _mm256_loadu_si128 (unaligned) which is safe but slightly slower on
+      pre-Haswell, or ensure TLSF alignment. Given this is a benchmark,
+      performance matters — unaligned load penalty is negligible on modern
+      uarch.
+    type: decision_blocker
+    affects:
+      - simd_add_sub_loops
+assumptions:
+  - "Target CPU is x86_64 with at least AVX support (2011 Sandy Bridge+), AVX2 for the 256-bit path (2013 Haswell+)"
+  - "Compiler is GCC or Clang — immintrin.h, __AVX2__, __AVX__ macros available"
+  - "tlsf.hpp already includes <immintrin.h> — no additional #include needed in id.hpp"
+  - "_mm256_loadu_si128 / _mm256_storeu_si128 (unaligned) safe for TLSF-allocated memory — no alignment fixup needed"
+  - "SIZEOF_WORD == 8 (uint64_t) on x86_64 — SIMD epi64 intrinsics operate on 64-bit lanes correctly"
+  - "benchmark_baseline.json schema (nested variant map) already supports adding avx and avx2 keys"
+  - "main.cpp --variant flag reads from argv and stores to baseline JSON under variant name — no changes needed"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TASKS
+# ═══════════════════════════════════════════════════════════════════════════
+tasks:
+  # ═════════════════════════════════════════════════════════════════════════
+  # TASK 1: SIMD add/sub hot loops
+  # ═════════════════════════════════════════════════════════════════════════
+  - id: simd_add_sub_loops
+    title: "Add AVX/AVX2-guarded SIMD alternatives to add/sub hot loops in id.hpp"
+    description: >-
+      Add #ifdef NN_HAVE_AVX2 / #ifdef NN_HAVE_AVX guarded SIMD alternatives
+      for the Phase 1 overlap loop in all six functions:
+      addz, addp, addm, subz, subp, subm (id.hpp lines 481-830).
+
+      AVX2 path (NN_HAVE_AVX2):
+        Process 4 uint64_t per iteration using _mm256_add_epi64 / _mm256_sub_epi64.
+        Carry detection: after SIMD add, compare vector result < operand vector
+        (unsigned overflow per lane), extract carry bits via _mm256_movemask_epi8,
+        propagate carry to next chunk.
+        Structure: while (remaining >= 4) { SIMD 4-way; fixup carries serially }
+        Remainder (< 4 words): scalar fallthrough.
+
+      AVX path (NN_HAVE_AVX):
+        Process 2 uint64_t per iteration using _mm_add_epi64 / _mm_sub_epi64.
+        Same carry-detect-and-fixup pattern but 2-wide.
+
+      Use _mm256_loadu_si128 / _mm256_storeu_si128 (unaligned) to avoid TLSF
+      alignment assumptions. Include <immintrin.h> guard only if not already
+      included (tlsf.hpp already does). Must produce bit-identical results to
+      the scalar version for all inputs.
+
+      Phases 2 and 3 (remainder and sign-word computation) remain unchanged
+      scalar — they run at most a few iterations and SIMD provides no benefit.
+    wave: 1
+    agent: gem-implementer
+    status: pending
+
+    # Context
+    covers:
+      - "AVX2 _mm256_add_epi64 loop for all 6 add/sub functions"
+      - "AVX _mm_add_epi64 loop for all 6 add/sub functions"
+      - "Carry detection via unsigned overflow comparison per SIMD lane"
+      - "Scalar carry fixup pass after each SIMD chunk"
+    dependencies: []
+    context_files:
+      - path: src/id.hpp
+        description: >-
+          Contains all 6 add/sub functions (addz:533-561, addp:578-614,
+          addm:481-517, subz:689-717, subp:734-770, subm:639-675).
+          Phase 1 overlap loop is the target for SIMD replacement.
+          Functions also implement Phase 2 remainder and Phase 3 sign-word
+          — these remain scalar.
+      - path: src/tlsf.hpp
+        description: >-
+          Line 49 includes <immintrin.h> — SIMD intrinsics already available.
+          TLSF allocator may return 16-byte aligned pointers, hence use
+          unaligned load/store (_mm256_loadu_si128 / _mm256_storeu_si128).
+
+    # Acceptance criteria (injected from objective)
+    acceptance_criteria:
+      - "AVX2 path guarded by #ifdef NN_HAVE_AVX2, AVX path guarded by #ifdef NN_HAVE_AVX"
+      - "Scalar remainders: all functions fall through to original scalar for final < vector-width words"
+      - "Phases 2 and 3 unchanged — only Phase 1 overlap loop gets SIMD variant"
+      - "Bit-identical: for any input, SIMD path produces identical result to scalar"
+      - "No new #include directives needed (immintrin.h already in tlsf.hpp)"
+
+    # Verification
+    success_criteria:
+      - "Compiles with -mavx2 -DNN_HAVE_AVX2 without errors or warnings"
+      - "Compiles with -mavx -DNN_HAVE_AVX without errors or warnings"
+      - "Compiles without NN_HAVE_AVX/NN_HAVE_AVX2 defined (scalar-only) without errors"
+      - "Benchmark run with avx2 variant completes all 5 computations correctly"
+      - "Benchmark run with avx variant completes all 5 computations correctly"
+      - "Error terms for all 5 computations are identical between scalar and SIMD variants"
+
+    # Handoff
+    handoff:
+      do_not_reinvestigate:
+        - "Hot loop locations in id.hpp — already identified at lines 481-830"
+        - "immintrin.h already included via tlsf.hpp — do not add duplicate #include"
+        - "TLSF memory alignment is not guaranteed 32-byte — use unaligned load/store"
+      minimal_change: >-
+        Insert guarded SIMD sections into each of the 6 functions only for
+        the Phase 1 overlap loop. Do not restructure functions or touch
+        Phase 2/Phase 3. Do not modify the dispatch logic (iadd/isub).
+      acceptance_checks:
+        - "Build all 3 configurations (scalar, AVX, AVX2) and compare output for sqrt(2), sin(1), cos(1), cube_root(2), pi"
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # TASK 2: CMake targets
+  # ═════════════════════════════════════════════════════════════════════════
+  - id: cmake_avx_targets
+    title: "Add CMake targets for AVX and AVX2 benchmark builds"
+    description: >-
+      Add two new executables to CMakeLists.txt:
+
+      numeric_demo_avx:
+        Compiles src/main.cpp with -mavx -DNN_HAVE_AVX
+        Links against numeric-lib
+        target_compile_features(cxx_std_23)
+
+      numeric_demo_avx2:
+        Compiles src/main.cpp with -mavx2 -DNN_HAVE_AVX2
+        Links against numeric-lib
+        target_compile_features(cxx_std_23)
+
+      Add a CMake check (check_cxx_source_compiles) that verifies the
+      compiler accepts -mavx2 before adding the avx2 target, and similarly
+      for -mavx. If the compiler doesn't support these, skip the target
+      with a status message rather than failing.
+
+      These targets are build-only — main.cpp reads --variant and
+      --baseline-variant flags at runtime to identify which variant's
+      timings to store/display, so no source changes in main.cpp needed.
+    wave: 1
+    agent: gem-implementer
+    status: pending
+
+    # Context
+    covers:
+      - "CMakeLists.txt target definitions for avx and avx2 variants"
+      - "Compile flag propagation: -mavx/-mavx2 and -DNN_HAVE_AVX/-DNN_HAVE_AVX2"
+      - "Compiler capability detection via check_cxx_source_compiles"
+    dependencies: []
+    context_files:
+      - path: CMakeLists.txt
+        description: >-
+          Existing numeric_demo target at line 35-38. Pattern to follow:
+          add_executable, target_link_libraries(PRIVATE numeric-lib),
+          target_compile_features(cxx_std_23). Add new targets after
+          the existing one, guarded by NUMERIC_BUILD_MAIN.
+
+    # Acceptance criteria
+    acceptance_criteria:
+      - "numeric_demo_avx compiles src/main.cpp with -mavx and -DNN_HAVE_AVX"
+      - "numeric_demo_avx2 compiles src/main.cpp with -mavx2 and -DNN_HAVE_AVX2"
+      - "Both targets link numeric-lib interface library"
+      - "CMake gracefully skips unsupported targets when compiler lacks AVX support"
+      - "Default numeric_demo target unchanged (scalar-only, no new flags)"
+
+    # Verification
+    success_criteria:
+      - "cmake -B build succeeds with all targets created"
+      - "cmake --build build --target numeric_demo_avx succeeds"
+      - "cmake --build build --target numeric_demo_avx2 succeeds"
+      - "cmake --build build --target numeric_demo succeeds (scalar, unchanged)"
+      - "benchmark_baseline.json remains valid (no corruption from CMake step)"
+
+    # Handoff
+    handoff:
+      do_not_reinvestigate:
+        - "Existing numeric_demo target pattern at CMakeLists.txt:35-38"
+        - "CMake find_package(Threads) already present — no threading change needed"
+      minimal_change: >-
+        Add two new target blocks after the existing numeric_demo target.
+        Wrap in if(NUMERIC_BUILD_MAIN) block. Add include(CheckCXXSourceCompiles)
+        at top of file for feature detection.
+      acceptance_checks:
+        - "cmake --build build --target numeric_demo_avx2 && ./build/numeric_demo_avx2 --help (no crash)"
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # TASK 3: Build & Baseline update
+  # ═════════════════════════════════════════════════════════════════════════
+  - id: build_update_baseline
+    title: "Build all targets and update benchmark baseline with AVX variants"
+    description: >-
+      Full build + baseline collection sequence:
+
+      1. cmake -B build && cmake --build build (all targets)
+      2. NUMERIC_THREADS=1 ./build/numeric_demo --variant=no_avx_no_threads --update-baseline
+      3. ./build/numeric_demo --variant=with_threads --update-baseline
+      4. ./build/numeric_demo_avx --variant=avx --update-baseline
+      5. ./build/numeric_demo_avx2 --variant=avx2 --update-baseline
+      6. NUMERIC_THREADS=1 ./build/numeric_demo --baseline-variant=no_avx_no_threads
+
+      Validate benchmark_baseline.json contains all 4 variants.
+      Confirm multi-column table shows 4 data columns.
+      Take screenshot or capture console output for verification.
+      Verify error terms remain identical across all 4 variants
+      (sqrt(2) error / sin(1) error / cos(1) error / cube_root(2) error / pi error
+      must match between variants).
+    wave: 2
+    agent: gem-devops
+    status: pending
+
+    # Context
+    covers:
+      - "Build all 4 targets (numeric_demo, numeric_demo_avx, numeric_demo_avx2)"
+      - "Baseline update for all 4 variant names"
+      - "4-column comparison table verification"
+      - "Error term cross-variant equivalence check"
+    dependencies:
+      - simd_add_sub_loops
+      - cmake_avx_targets
+    context_files:
+      - path: benchmark_baseline.json
+        description: >-
+          Current baseline contains no_avx_no_threads and with_threads.
+          After update, will also contain avx and avx2 entries with 5
+          benchmark keys each.
+
+    # Acceptance criteria
+    acceptance_criteria:
+      - "benchmark_baseline.json contains 4 variant keys: no_avx_no_threads, with_threads, avx, avx2"
+      - "Each variant has the same 5 benchmark keys: sqrt(2), cube_root(2), sin(1), cos(1), pi"
+      - "Default run shows table with 4 columns (baseline + 3 comparison variants)"
+      - "No regression: existing benchmarks values in baseline are unchanged (no_avx_no_threads, with_threads)"
+      - "Error terms for all 5 computations are identical across all 4 variants"
+
+    # Verification
+    success_criteria:
+      - "All 4 builds complete without errors"
+      - "benchmark_baseline.json is valid JSON with 4 variant entries"
+      - "No crash on any variant run"
+      - "Table displays all expected columns and rows"
+
+    # Handoff
+    handoff:
+      do_not_reinvestigate:
+        - "Benchmark baseline I/O already handles variant nesting — read_baseline/write_baseline in main.cpp"
+        - "CLI --variant and --update-baseline flags already supported"
+      minimal_change: >-
+        No source changes. Pure execution / build / baseline-collection task.
+      acceptance_checks:
+        - "grep for 'avx' and 'avx2' in benchmark_baseline.json shows valid entries"
+        - "No SIGILL or crash during execution"
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # TASK 4: Review SIMD implementation
+  # ═════════════════════════════════════════════════════════════════════════
+  - id: review_simd
+    title: "Review SIMD add/sub loops for correctness and safety"
+    description: >-
+      Review the SIMD-accelerated add/sub loop changes in id.hpp for
+      correctness, carry/borrow propagation soundness, and edge-case safety.
+      Verify that the vectorized + scalar carry resolution pattern produces
+      bit-identical results for all possible input lengths and sign
+      combinations.
+
+      Check:
+      - Carry detection logic: after _mm256_add_epi64, compare result < a
+        (unsigned comparison) yields per-lane carry. Is the carry vector
+        correctly OR-shifted into the next chunk?
+      - Borrow detection for subtraction: result > a (unsigned) yields per-lane
+        borrow.
+      - Scalar fixup pass correctly handles cascading carries (a carry from
+        a fixup can itself produce another carry — ensure loop terminates).
+      - Edge case: array length < SIMD vector width — falls through to scalar.
+      - Edge case: array length not a multiple of vector width — partial
+        final SIMD chunk not attempted.
+      - No undefined behavior: unaligned loads/stores, no out-of-bounds reads.
+      - NN_HAVE_AVX2 and NN_HAVE_AVX guards are exclusive and correct.
+    wave: 3
+    agent: gem-reviewer
+    status: pending
+
+    # Context
+    covers:
+      - "Correctness of SIMD carry/borrow detection and propagation"
+      - "Edge case coverage (short arrays, uneven lengths, sign combinations)"
+      - "Memory safety (unaligned load/store, bounds checking)"
+      - "Bit-identical result guarantee"
+      - "Compile-time guard correctness"
+    dependencies:
+      - build_update_baseline
+    context_files:
+      - path: src/id.hpp
+        description: "Modified add/sub hot loops — review the SIMD guard sections"
+
+    # Quality gates
+    acceptance_criteria:
+      - "All edge cases covered: zero-length, 1-word, 3-word, 4-word, 5-word, 1000-word arrays"
+      - "Carry chain across SIMD chunks correctly propagates without losing bits"
+      - "Borrow chain across SIMD chunks correctly propagates (subtraction)"
+      - "No unaligned loads that could crash on ARM or pre-SSE3 CPUs (but x86_64 immintrin.h handles unaligned)"
+      - "AVX path (128-bit) and AVX2 path (256-bit) are mutually exclusive"
+
+    # Verification
+    success_criteria:
+      - "Review finds no correctness defects"
+      - "All acceptance criteria verified"
+
+    # Agent-specific handoff
+    requires_review: true
+    review_depth: full
+    review_security_sensitive: false

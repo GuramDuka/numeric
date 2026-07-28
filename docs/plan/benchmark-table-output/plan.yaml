@@ -1,0 +1,349 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN METADATA
+# ═══════════════════════════════════════════════════════════════════════════
+plan_id: benchmark-table-output
+objective: "Add benchmark table output with baseline percentage comparison to numeric_demo (src/main.cpp): per-benchmark individual timing, baseline JSON file I/O, table-formatted output with % change vs baseline, CLI flags --update-baseline and --benchmark-json. Zero external dependencies. Backward-compatible — default run prints existing output PLUS comparison table."
+created_at: "2026-07-28T00:00:00Z"
+created_by: "gem-planner"
+status: completed
+tldr: >
+  Restructure src/main.cpp in 3 waves: (1) per-benchmark timing capture +
+  CLI arg parsing, (2) baseline JSON I/O + table output + integration,
+  (3) build & test. Single-file change. Add ~120 lines net new code.
+  No external deps — hand-written minimal JSON parser/writer and
+  iomanip-based table formatting.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN-LEVEL METRICS
+# ═══════════════════════════════════════════════════════════════════════════
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 3
+  risk_score: medium
+quality_warnings:
+  - "Hand-written JSON parser: must handle whitespace, negative values not expected (nanos always positive), single object depth only."
+  - "Per-benchmark timing: ensure the pi computation loop (for{}) is wrapped as one block, NOT per-iteration."
+  - "I/O hole tracking: per-benchmark hole must be properly separated from computation timing — each benchmark's I/O hole must not leak into its neighbor."
+  - "Header-only globals in id.hpp/ii.hpp cause linker errors with multi-TU — main.cpp only includes nn.hpp which is safe (single TU)."
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLANNING ANALYSIS (MEDIUM complexity)
+# ═══════════════════════════════════════════════════════════════════════════
+open_questions:
+  - question: "Should --benchmark-json output go to stdout (mixed with text output) or to a separate file?"
+    context: "If stdout, JSON appears after the human-readable output in the same stream. This is simplest. If a separate file, need --benchmark-json=<filename> syntax. User spec says 'CLI flag to output JSON machine-readable results' — stdout is sufficient."
+    type: decision_blocker
+    affects: ["main.cpp CLI design"]
+  - question: "Should baseline comparison show ms or nanos in the table columns?"
+    context: "Current aggregate output shows SECS/MILIS/MICROS/NANOS/INDEX. Millisecond precision (1-3 decimal places) is most readable for the table. Nanos are too large to scan easily. Store baseline in nanos for precision, display in ms."
+    type: decision_blocker
+    affects: ["table formatting", "baseline JSON format"]
+  - question: "What format for the baseline JSON — flat {name->nanos} or nested {benchmarks: {name: {nanos: N}}}?"
+    context: "Flat format is simplest to parse/write by hand. Nested is more extensible (could add iterations, precision, etc. later). Flat chosen for minimal hand-written parser complexity."
+    type: decision_blocker
+    affects: ["baseline JSON parser/writer design"]
+assumptions:
+  - "All 5 benchmarks (sqrt2, cube_root2, sin1, cos1, pi) complete successfully every run — no partial-run baseline saves needed."
+  - "benchmark_baseline.json lives in the CWD (working directory where numeric_demo is invoked)."
+  - "Missing baseline file on first run is handled gracefully — table shows 'N/A' for baseline and '—' for change, no crash."
+  - "The pi computation loop's convergence check (pi_e < error) always terminates — if it doesn't, the benchmark hangs. This is pre-existing behavior, not introduced here."
+  - "Per-benchmark timing overhead (clock_gettime call itself) is negligible (< 1 us) relative to computation times (10-1000+ ms)."
+  - "Windows QueryPerformanceCounter path is preserved but not tested — Linux CLOCK_PROCESS_CPUTIME_ID is the primary target."
+  - "C++23 features (std::print, std::format if available) can be used when __has_include(<print>) is true, with cout fallback."
+  - "Thread pool in wk.hpp may cause slight timing variability across runs due to OS thread scheduling — this is expected and documented."
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TASKS
+# ═══════════════════════════════════════════════════════════════════════════
+tasks:
+  # ─────────────────────────────────────────────────────────────────────────
+  # WAVE 1: Foundations — no dependencies between T1 and T2
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - id: per_benchmark_timing
+    status: completed
+    title: "Add per-benchmark individual timing capture"
+    description: >
+      Restructure src/main.cpp to wrap each of the 5 benchmark computation
+      blocks in individual clock_gettime start/stop pairs. Define a
+      BenchmarkResult struct { string name; uint64_t nanos; } and store
+      results in a vector for later use.
+
+      Specific blocks to time:
+      - sqrt(2): soft = nn::numeric(2).root(2,10) + normalize + error calc
+        (lines 154-157 of current file)
+      - cube_root(2): soft = nn::numeric(2).root(3,5100) + normalize + error
+        (lines 200-202)
+      - sin(1): soft = nn::numeric(1).sin(224) + normalize + error
+        (lines 246-248)
+      - cos(1): soft = nn::numeric(1).cos(224) + normalize + error
+        (lines 291-293)
+      - pi: entire for() convergence loop (lines 366-390) as one block
+
+      Keep existing aggregate start/stop/hole for backward-compatible
+      SECS/MILIS/MICROS/NANOS/INDEX output. Add per-benchmark hole tracking
+      by moving the I/O-around-print timing into a per-benchmark hole
+      accumulator so that per-benchmark net = elapsed - hole.
+
+      The reference value initialization (hard = numeric("...")) is
+      excluded from timing — it is setup, not benchmarked computation.
+
+      The existing assert/verify of correctness (error calculation) remains
+      inside the timed block since it is part of the computation.
+    wave: 1
+    agent: gem-implementer
+    covers:
+      - "per-benchmark timing infrastructure"
+      - "BenchmarkResult struct definition"
+      - "clock_gettime start/stop around each computation block"
+      - "per-benchmark hole measurement"
+    dependencies: []
+    context_files:
+      - path: src/main.cpp
+        description: "455 lines — benchmark/demo program. Insert per-benchmark start/stop timers and define BenchmarkResult struct."
+    acceptance_criteria:
+      - "AC1: BenchmarkResult struct defined before main() with name (string) and nanos (uint64_t)"
+      - "AC2: Each of the 5 benchmarks has its own clock_gettime start/stop (or QPC equivalent)"
+      - "AC3: Per-benchmark hole tracked separately so I/O from one benchmark's print doesn't leak into another's computation time"
+      - "AC4: Results stored in std::vector<BenchmarkResult> accessible after all benchmarks complete"
+      - "AC5: Aggregate SECS/MILIS/MICROS/NANOS/INDEX output unchanged"
+      - "AC6: Compiles with no warnings"
+    success_criteria:
+      - "cmake --build build succeeds"
+      - "numeric_demo runs and produces same correctness output (hard/soft/error values) as before"
+      - "grep 'struct BenchmarkResult' src/main.cpp returns 1 match"
+      - "grep -c 'clock_gettime.*start' src/main.cpp >= 6 (1 aggregate + 5 per-benchmark)"
+    tech_stack: ["C++23", "POSIX clocks (clock_gettime)", "QueryPerformanceCounter (Windows)"]
+    handoff:
+      do_not_reinvestigate:
+        - "Existing reference string values (hard = numeric(...)) — do not change"
+        - "pi_cont struct and pi() function signatures"
+        - "TS2I lambda and timer infrastructure (freq, ts2i, hole logic)"
+        - "normalize(3) semantics"
+      target_files: ["src/main.cpp"]
+      minimal_change: "Wrap existing computation blocks in start/stop; do NOT move or reorder code. Add BenchmarkResult struct near top of file. Add #include <vector>."
+      acceptance_checks:
+        - "cmake --build build"
+        - "numeric_demo runs without crash"
+        - "Output matches expected reference values for all 5 benchmarks"
+
+  - id: cli_argument_parsing
+    status: completed
+    title: "Add CLI flag parsing for --update-baseline and --benchmark-json"
+    description: >
+      Add argument parsing at the top of main() (before any timing) for
+      two optional flags:
+      - --update-baseline : save current run results as new baseline
+      - --benchmark-json  : output machine-readable JSON of results
+
+      Use simple argc/argv iteration. No external arg parsing library.
+      Store results as static bool variables at file scope or local
+      variables in main() passed to the integration function.
+
+      Behavior:
+      - If no flags: backward-compatible default run
+      - Flags can be combined: --update-baseline --benchmark-json
+      - Unknown flags should be silently ignored (or printed to stderr
+        for awareness but not crash)
+      - Flags at any position in args (not just first)
+    wave: 1
+    agent: gem-implementer
+    covers:
+      - "CLI argument parsing"
+      - "--update-baseline flag"
+      - "--benchmark-json flag"
+    dependencies: []
+    context_files:
+      - path: src/main.cpp
+        description: "455 lines — add argc/argv loop at start of main()"
+    acceptance_criteria:
+      - "AC7: --update-baseline parsed and stored as accessible bool"
+      - "AC8: --benchmark-json parsed and stored as accessible bool"
+      - "AC9: No flags = default behavior preserved"
+      - "AC10: Unknown flags ignored (no crash)"
+    success_criteria:
+      - "numeric_demo --update-baseline runs without crash"
+      - "numeric_demo --benchmark-json runs without crash"
+      - "numeric_demo --unknown-flag runs without crash (unknown flag ignored)"
+    tech_stack: ["C++23"]
+    handoff:
+      do_not_reinvestigate:
+        - "No external argument parsing libraries needed"
+        - "Simple for-loop over argv is sufficient"
+        - "Flag order doesn't matter"
+      target_files: ["src/main.cpp"]
+      minimal_change: "Insert arg loop at top of main() before timer start. 15-20 lines."
+      acceptance_checks:
+        - "cmake --build build"
+        - "numeric_demo --help (any flag) runs without crash"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # WAVE 2: Features — depends on W1 data structures (BenchmarkResult, flags)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - id: baseline_io_and_table
+    status: completed
+    title: "Implement baseline JSON I/O, table output, and integration wiring"
+    description: >
+      Add three capabilities to src/main.cpp, wired together via CLI flags:
+
+      (A) BASELINE JSON READER:
+      Hand-written parser for format:
+        {"sqrt(2)": 12345678, "cube_root(2)": 23456789, ...}
+      - Skip whitespace, expect '{', read quoted key, expect ':', read
+        integer value, expect ',' or '}'
+      - Return std::map<std::string, uint64_t>
+      - If file missing or parse error → empty map (no crash)
+      - No external JSON library
+
+      (B) BASELINE JSON WRITER:
+      - Write std::vector<BenchmarkResult> → same flat JSON format
+      - File: benchmark_baseline.json in CWD
+      - Only writes when --update-baseline flag is set
+      - Print confirmation message to cout
+
+      (C) TABLE OUTPUT:
+      After existing aggregate output, print a formatted comparison table:
+        Benchmark         Current (ms)   Baseline (ms)   Change (%)   Status
+        ─────────────────────────────────────────────────────────────────────
+        sqrt(2)                12.345         12.000        +2.88%   slower
+        cube_root(2)          234.567        250.000        -6.17%   faster
+        sin(1)                 34.567         35.000        -1.24%   faster
+        cos(1)                 45.678         44.000        +3.81%   slower
+        pi                    567.890        560.000        +1.41%   slower
+        ─────────────────────────────────────────────────────────────────────
+      - Convert nanos → ms with fixed 3-decimal precision
+      - % change = ((current_ns - baseline_ns) / baseline_ns) * 100
+      - Show 'N/A' for baseline and '—' for change when no baseline exists
+      - Faster = current < baseline (negative change %)
+      - Status colored: "faster" = green-tinted, "slower" = red-tinted
+        (optional, use plain text if escape codes are problematic)
+
+      (D) JSON MACHINE OUTPUT (when --benchmark-json flag is set):
+      After table output, print to stdout:
+        {
+          "benchmarks": {
+            "sqrt(2)" : { "nanos": 12345678 },
+            ...
+          },
+          "aggregate": {
+            "secs": 1.23,
+            "milis": 1234,
+            "micros": 1234567,
+            "nanos": 1234567890,
+            "index": 42
+          }
+        }
+
+      (E) INTEGRATION:
+      - At end of main(), after aggregate output:
+        1. If --update-baseline: write benchmark_baseline.json
+        2. Read existing baseline (if UPDATE, re-read after write to
+           show self-comparison; if not UPDATE, read before comparison)
+        3. Print comparison table
+        4. If --benchmark-json: print JSON output
+      - All 5 steps are part of the same task since they share data
+        structures and are tightly coupled in a single file.
+
+      Behavioral matrix:
+      | Flags                     | Baseline read | Baseline write | Table | JSON output |
+      |---------------------------|---------------|----------------|-------|-------------|
+      | (none)                    | Yes (if exists)| No            | Yes   | No          |
+      | --update-baseline         | Yes (re-read) | Yes            | Yes   | No          |
+      | --benchmark-json          | Yes (if exists)| No            | Yes   | Yes         |
+      | --update-baseline + json  | Yes (re-read) | Yes            | Yes   | Yes         |
+    wave: 2
+    agent: gem-implementer
+    covers:
+      - "JSON baseline reader (hand-written)"
+      - "JSON baseline writer"
+      - "Table formatting with iomanip"
+      - "Percentage change calculation"
+      - "Machine-readable JSON output"
+      - "Behavioral integration wiring"
+    dependencies:
+      - "per_benchmark_timing"
+      - "cli_argument_parsing"
+    context_files:
+      - path: src/main.cpp
+        description: "455 lines (~575 after W1). Add ~150 new lines for JSON I/O, table, integration."
+    acceptance_criteria:
+      - "AC11: baseline JSON reader parses '{\"key\": 123}' correctly"
+      - "AC12: baseline JSON reader returns empty map for missing file"
+      - "AC13: baseline JSON writer produces valid flat JSON"
+      - "AC14: Table printed after aggregate output with all 5 benchmarks"
+      - "AC15: % change calculated correctly: ((current - baseline) / baseline) * 100"
+      - "AC16: No baseline = table shows 'N/A' and '—'"
+      - "AC17: --update-baseline writes benchmark_baseline.json"
+      - "AC18: --benchmark-json prints JSON after table"
+      - "AC19: Default run (no flags) produces original output PLUS table"
+      - "AC20: Compiles with zero warnings"
+    success_criteria:
+      - "cmake --build build succeeds"
+      - "Run 1: numeric_demo --update-baseline → creates benchmark_baseline.json"
+      - "Run 2: numeric_demo → shows table with baseline comparison"
+      - "Run 3: numeric_demo --benchmark-json → shows JSON output at end"
+      - "Run 4: numeric_demo (no baseline file) → shows table with N/A"
+      - "Verify JSON output is valid (python3 -m json.tool or manual check)"
+    tech_stack: ["C++23", "hand-written JSON parser", "iomanip formatting"]
+    handoff:
+      do_not_reinvestigate:
+        - "BenchmarkResult struct layout defined in W1 — use as-is"
+        - "JSON format is flat {name: nanos} — do NOT add nesting"
+        - "Windows vs Linux timer definitions — do not touch"
+        - "pi_cont and pi() implementation — not relevant"
+      required_test_first: "Build after W1 changes to confirm structure is stable"
+      target_files: ["src/main.cpp"]
+      minimal_change: "Add new functions after main() or before. Do NOT modify existing computation blocks (already timed in W1)."
+      acceptance_checks:
+        - "cmake --build build && ./build/numeric_demo --update-baseline && ./build/numeric_demo"
+        - "python3 -c \"import json; json.load(open('benchmark_baseline.json'))\" (validate JSON)"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # WAVE 3: Build & Test Verification
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - id: build_verify
+    status: completed
+    title: "Full build and functional verification of benchmark output"
+    description: >
+      Build and test all flag combinations of numeric_demo:
+      1. Clean rebuild: rm -rf build && cmake -B build && cmake --build build
+      2. No-args run: verify original output (hard/soft/error values) still
+         correct PLUS comparison table appears at end
+      3. --update-baseline: verify benchmark_baseline.json created and valid
+      4. Second run (no flags): verify table shows baseline comparison with
+         correct % change values
+      5. --benchmark-json: verify JSON output appears and is valid
+      6. Combined flags: --update-baseline --benchmark-json
+      7. Verify existing tests still pass: ctest --test-dir build --timeout 30
+      8. Verify no new compiler warnings beyond pre-existing
+    wave: 3
+    agent: gem-devops
+    covers:
+      - "build verification"
+      - "regression testing"
+      - "CLI flag combination testing"
+    dependencies:
+      - "baseline_io_and_table"
+    context_files:
+      - path: build/
+        description: "Build directory (clean rebuild)"
+    acceptance_criteria:
+      - "AC21: cmake --build succeeds with zero errors"
+      - "AC22: ctest --test-dir build passes both test_integer and test_numeric"
+      - "AC23: Default numeric_demo run shows existing benchmark output + comparison table"
+      - "AC24: --update-baseline creates valid benchmark_baseline.json"
+      - "AC25: Subsequent run with baseline file shows correct % change table"
+      - "AC26: --benchmark-json appends valid JSON output"
+      - "AC27: No new compiler warnings beyond pre-existing ones"
+    environment: development
+    requires_approval: false
+    devops_security_sensitive: false
+    tech_stack: ["CMake", "C++23", "ctest", "g++ 14.3.1"]
+    handoff:
+      do_not_reinvestigate: ["Build output is final validation gate"]
+      target_files: []
+      acceptance_checks:
+        - "ctest --test-dir build --output-on-failure"
+        - "running numeric_demo with each flag combination"

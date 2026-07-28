@@ -1,0 +1,340 @@
+{
+  "context_envelope": {
+    "meta": {
+      "plan_id": "20260728-simd-acceleration",
+      "created_at": "2026-07-28T00:00:00Z",
+      "last_updated": "2026-07-28T00:00:00Z",
+      "version": 1
+    },
+    "tech_stack": [
+      {
+        "name": "C++",
+        "version": "23",
+        "usage_context": "All source in single-header style; nn.hpp pulls tlsf→id→wk→ii→nn chain; main.cpp is benchmark CLI",
+        "config_files": []
+      },
+      {
+        "name": "GCC/Clang x86_64",
+        "version": "≥4.9 for AVX2 support",
+        "usage_context": "Target compiler; -mavx and -mavx2 flags enable VEX-encoded SIMD; __AVX2__ and __AVX__ macros provided",
+        "config_files": []
+      },
+      {
+        "name": "CMake",
+        "version": "≥3.14",
+        "usage_context": "Build system; one interface library (numeric-lib) + per-variant executables",
+        "config_files": ["CMakeLists.txt"]
+      },
+      {
+        "name": "immintrin.h",
+        "version": "compiler-provided",
+        "usage_context": "AVX/AVX2 intrinsics header; already included via tlsf.hpp line 49 — no new #include needed",
+        "config_files": []
+      }
+    ],
+    "conventions": [
+      "All code in headers — only main.cpp and test files are .cpp",
+      "Namespace nn for all library code",
+      "Header-only globals (nn_izero, nn_ione, stat_iadd_, etc.) — single TU only",
+      "Compile-time feature selection via -DNN_HAVE_* macros (no runtime dispatch)",
+      "MIT license header in every source file",
+      "SIZEOF_WORD=8 on x86_64 → word=uint64_t, dword=__uint128_t",
+      "normalize(3) after arithmetic: bit1=trim trailing zero bits, bit2=GCD reduce"
+    ],
+    "constraints": {
+      "hard": [
+        "Must produce bit-identical results to scalar for all inputs — no rounding or truncation differences",
+        "SIMD paths must be guarded by #ifdef NN_HAVE_AVX2 / #ifdef NN_HAVE_AVX — compilation without these defines produces original scalar code only",
+        "No runtime CPU feature detection — binary crashes on unsupported CPUs (intentional benchmark design, documented in open_questions)",
+        "Must compile without new warnings under -Wall -Wextra with g++ 14.3.1 and clang++",
+        "Words are uint64_t — only _epi64 SIMD intrinsics (64-bit lanes) are valid"
+      ],
+      "soft": [
+        "Prefer additive SIMD sections over restructuring the 6 functions",
+        "Use unaligned load/store (_mm256_loadu_si128 / _mm256_storeu_si128) to avoid TLSF alignment assumptions",
+        "Phases 2 and 3 (remainder/sign-word) should remain scalar unchanged",
+        "Only the Phase 1 overlap loop merits SIMD acceleration"
+      ],
+      "compatibility": [
+        "Linux x86_64 primary target (clock_gettime CLOCK_PROCESS_CPUTIME_ID for timing)",
+        "Windows secondary (QueryPerformanceCounter) — immintrin.h available on MSVC via intrin.h",
+        "AVX target: Sandy Bridge (2011) or later",
+        "AVX2 target: Haswell (2013) or later",
+        "CMake check_cxx_source_compiles detects compiler support before enabling targets"
+      ],
+      "security_requirements": [
+        "No bounds over-read: SIMD loads must stay within the allocated data_ array bounds",
+        "Unaligned loads (_mm_loadu_si128 / _mm256_loadu_si128) are safe on x86_64 but may trap on other architectures — not a concern for x86_64-only target"
+      ]
+    },
+    "architecture_snapshot": {
+      "key_dirs": ["src/", "tests/", "build/"],
+      "patterns": [
+        "Single-main architecture: src/main.cpp is both demo and benchmark with CLI flags",
+        "Header include chain: tlsf.hpp → id.hpp → wk.hpp → ii.hpp → nn.hpp → main.cpp",
+        "Rational arithmetic via integer numerator/denominator with GCD normalization",
+        "π via BBP formula with iterative pi_cont continuation object",
+        "Schoolbook add/sub with 3-phase structure (overlap, remainder, sign-word) and length-dispatching (addz/addp/addm, subz/subp/subm)",
+        "Multi-variant benchmark comparison table (4 columns currently: no_avx_no_threads, with_threads, avx, avx2)"
+      ],
+      "key_components": [
+        {
+          "name": "nn_integer (id.hpp)",
+          "location": "src/id.hpp",
+          "responsibility": [
+            "Core big-integer data type with ref-counted nn_integer_data",
+            "Schoolbook add/sub: addz (equal length), addp (this longer), addm (other longer), subz/subp/subm",
+            "Arithmetic shifts (isal/isar), bitwise ops (iand/ior/ixor/inot)",
+            "SIMD hot loop targets: 6 functions at lines 481-830"
+          ]
+        },
+        {
+          "name": "ThreadPool (wk.hpp)",
+          "location": "src/wk.hpp",
+          "responsibility": [
+            "Worker thread pool for parallel multiplication",
+            "global ThreadPool pool(effective_thread_count()) in ii.hpp"
+          ]
+        },
+        {
+          "name": "integer (ii.hpp)",
+          "location": "src/ii.hpp",
+          "responsibility": [
+            "Public integer class wrapping nn_integer",
+            "Multiplication (scalar + parallel via ThreadPool)",
+            "String conversion, GCD, pow, factorial",
+            "effective_thread_count() reads NUMERIC_THREADS env var"
+          ]
+        },
+        {
+          "name": "numeric (nn.hpp)",
+          "location": "src/nn.hpp",
+          "responsibility": [
+            "Rational fraction class: numerator/denominator as integer",
+            "sin, cos, atan, root, pow, pi (BBP formula), rounding"
+          ]
+        },
+        {
+          "name": "Benchmark CLI (main.cpp)",
+          "location": "src/main.cpp",
+          "responsibility": [
+            "Computes sqrt(2), cube_root(2), sin(1), cos(1), pi against reference values",
+            "High-res CPU timing with CLOCK_PROCESS_CPUTIME_ID (Linux) or QPC (Windows)",
+            "I/O hole subtraction for accurate computation timing",
+            "Baseline read/write to benchmark_baseline.json",
+            "Multi-column variant comparison table",
+            "CLI flags: --update-baseline, --variant=<name>, --baseline-variant=<name>, --benchmark-json"
+          ]
+        }
+      ]
+    },
+    "research_digest": {
+      "relevant_files": [
+        {
+          "path": "src/id.hpp",
+          "purpose": [
+            "Primary modification target: addz/addp/addm at lines 481-614",
+            "subz/subp/subm at lines 639-770",
+            "Add #ifdef NN_HAVE_AVX2 / NN_HAVE_AVX guarded SIMD sections"
+          ],
+          "confidence": 1.0
+        },
+        {
+          "path": "CMakeLists.txt",
+          "purpose": [
+            "Add numeric_demo_avx and numeric_demo_avx2 targets with -mavx/-mavx2 and -DNN_HAVE_AVX/-DNN_HAVE_AVX2",
+            "Add check_cxx_source_compiles for AVX/AVX2 compiler support detection"
+          ],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/tlsf.hpp",
+          "purpose": [
+            "Line 49 already includes <immintrin.h> — SIMD intrinsics available project-wide",
+            "TLSF allocator alignment may be 16-byte — justification for unaligned load/store"
+          ],
+          "confidence": 1.0
+        },
+        {
+          "path": "src/main.cpp",
+          "purpose": [
+            "No changes needed — already supports --variant and --update-baseline for multi-variant baseline",
+            "Verification target: error terms must match between scalar and SIMD variants"
+          ],
+          "confidence": 1.0
+        },
+        {
+          "path": "benchmark_baseline.json",
+          "purpose": [
+            "Data file; will gain avx and avx2 variant entries after execution of Task 3",
+            "Current structure supports nested variant map — additive only"
+          ],
+          "confidence": 1.0
+        },
+        {
+          "path": "AGENTS.md",
+          "purpose": [
+            "Project conventions: header-only, known pitfalls (Newton blowup, normalize modes, TLSF globals)",
+            "known pitfall (3): integer + numeric ambiguity — not relevant to SIMD add/sub"
+          ],
+          "confidence": 1.0
+        }
+      ],
+      "patterns_found": [
+        {
+          "name": "Three-phase schoolbook add/sub",
+          "category": "core algorithm",
+          "confidence": 1.0,
+          "example_location": [
+            "src/id.hpp:481-517 (addm), 533-561 (addz), 578-614 (addp)",
+            "src/id.hpp:639-675 (subm), 689-717 (subz), 734-770 (subp)"
+          ]
+        },
+        {
+          "name": "Length-based dispatch (addz/addp/addm, subz/subp/subm)",
+          "category": "dispatch pattern",
+          "confidence": 1.0,
+          "example_location": [
+            "src/id.hpp:794-804 (iadd), 819-829 (isub)"
+          ]
+        },
+        {
+          "name": "Carry via dword overflow extraction",
+          "category": "implementation detail",
+          "confidence": 1.0,
+          "example_location": [
+            "src/id.hpp:494-496: cf = static_cast<word>((q >> 64) & 1)",
+            "src/id.hpp:652-654: borrow equivalent via dword underflow"
+          ]
+        },
+        {
+          "name": "Commented-out SIMD multiplication (SSE2 32-bit path)",
+          "category": "historical reference",
+          "confidence": 0.9,
+          "example_location": [
+            "src/ii.hpp:1407-1456 — commented #if 0 block with __m128i for 32-bit word multiplication"
+          ]
+        },
+        {
+          "name": "Multi-variant baseline infrastructure",
+          "category": "benchmark infrastructure",
+          "confidence": 1.0,
+          "example_location": [
+            "src/main.cpp:136-151 (CLI flag parsing)",
+            "src/main.cpp:670-696 (baseline write)",
+            "src/main.cpp:698-800 (multi-column table output)"
+          ]
+        }
+      ],
+      "gotchas": [
+        {
+          "text": "TLSF allocator in tlsf.hpp uses its own malloc/free — alignment guarantee is implementation-specific, likely 16-byte. Use unaligned SIMD load/store (_mm256_loadu_si128) not aligned variants.",
+          "confidence": 1.0
+        },
+        {
+          "text": "Newton fraction blowup: root(2, iter) doubles bits each iteration. Benchmarks use iter=10 which is safe. SIMD does not affect this.",
+          "confidence": 1.0
+        },
+        {
+          "text": "Header-only globals (nn_izero etc.) cause multi-TU linker errors. main.cpp is single TU — safe. SIMD targets are also single TU compilations of the same main.cpp with different flags.",
+          "confidence": 1.0
+        },
+        {
+          "text": "normalize(3) semantics: bit1=trim trailing zero bits (trivial for SIMD since trailing zeros from add/sub are data-dependent, not SIMD-induced)",
+          "confidence": 1.0
+        },
+        {
+          "text": "The commented-out SSE2 multiplication in ii.hpp used 32-bit words (__m128i _mm_mul_epu32). Our AVX/AVX2 add/sub uses 64-bit words (_mm256_add_epi64) — different intrinsics, same file shares both.",
+          "confidence": 0.9
+        },
+        {
+          "text": "immintrin.h is already included unconditionally in tlsf.hpp line 49 — no need for platform or macro guards around the #include. The functions themselves must be guarded by NN_HAVE_AVX2 / NN_HAVE_AVX.",
+          "confidence": 1.0
+        }
+      ]
+    },
+    "prior_decisions": [
+      {
+        "decision": "Multi-variant baseline JSON format: nested {variant: {benchmark_name: nanos}}",
+        "rationale": [
+          "Supports adding new variants (avx, avx2) without schema change",
+          "Hand-written parser handles nesting explicitly"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "decision": "NUMERIC_THREADS env var for runtime single-thread forcing",
+        "rationale": [
+          "Existing pattern — no change needed",
+          "no_avx_no_threads variant uses NUMERIC_THREADS=1"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "decision": "Unaligned SIMD load/store to handle TLSF allocation",
+        "rationale": [
+          "No alignment contract from TLSF allocator",
+          "Near-zero performance cost on Haswell+ for 128/256-bit unaligned loads"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "decision": "No runtime CPU dispatch — compile-time selection via -DNN_HAVE_AVX2",
+        "rationale": [
+          "Simpler implementation",
+          "Each benchmark binary targets a specific ISA level",
+          "CPU feature detection would add complexity without benefit for controlled benchmarking"
+        ],
+        "confidence": 0.9
+      },
+      {
+        "decision": "Only SIMD-accelerate Phase 1 overlap loop — leave Phases 2 and 3 scalar",
+        "rationale": [
+          "Phase 1 is the hot loop (processes min(length_a, length_b) words)",
+          "Phase 2 runs at most the difference between lengths (typically small)",
+          "Phase 3 is 1-2 iterations — overhead of SIMD setup not justified",
+          "Scalar remainder for < vector-width count avoids partial-vector complexity"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "decision": "Use addp/addm/addz dispatch as-is — no SIMD in the dispatch functions",
+        "rationale": [
+          "iadd/isub are thin length-comparison wrappers (lines 794-829)",
+          "SIMD is inside each specialized function, not in the dispatcher"
+        ],
+        "confidence": 1.0
+      }
+    ],
+    "reuse_notes": [
+      {
+        "path": "AGENTS.md",
+        "trust": "high"
+      },
+      {
+        "path": "src/id.hpp",
+        "trust": "high"
+      },
+      {
+        "path": "src/tlsf.hpp",
+        "trust": "high"
+      },
+      {
+        "path": "src/ii.hpp",
+        "trust": "high"
+      },
+      {
+        "path": "CMakeLists.txt",
+        "trust": "high"
+      },
+      {
+        "path": "src/main.cpp",
+        "trust": "high"
+      },
+      {
+        "path": "benchmark_baseline.json",
+        "trust": "high"
+      }
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+plan_id: benchmark-multi-variant
+objective: "Add multi-variant baseline comparison: rename baseline to no_avx_no_threads, add runtime thread disabling via NUMERIC_THREADS env var, support multiple named variants in baseline JSON, display multi-column comparison table."
+created_at: "2026-07-28T00:00:00Z"
+status: completed
+tasks:
+  - id: thread_disable_mechanism
+    status: completed
+    title: "Add runtime thread disable mechanism via NUMERIC_THREADS env var"
+    description: >
+      In ii.hpp, change thread_hardware_concurrency from a const to a 
+      function that checks NUMERIC_THREADS env var. If set, use that value 
+      instead of hardware_concurrency(). This allows forcing single-threaded 
+      mode for the "no_avx_no_threads" baseline variant.
+    wave: 1
+    agent: gem-implementer
+    dependencies: []
+    
+  - id: cli_variant_flags
+    status: completed
+    title: "Add --variant and --baseline-variant CLI flags"
+    description: >
+      Add --variant=<name> to name the current run's configuration.
+      Add --baseline-variant=<name> to specify reference variant (default: no_avx_no_threads).
+    wave: 1
+    agent: gem-implementer
+    dependencies: []
+    
+  - id: multi_variant_infra
+    status: completed
+    title: "Restructure baseline I/O and table for multi-variant support"
+    description: >
+      Change baseline JSON format from flat {name: nanos} to nested 
+      {variant: {name: nanos, ...}, ...}. Update read_baseline to return 
+      nested map. Update write_baseline to merge/append per-variant.
+      Update table to show all variants as columns with % change vs baseline variant.
+    wave: 2
+    agent: gem-implementer
+    dependencies: ["thread_disable_mechanism", "cli_variant_flags"]
+    
+  - id: build_verify
+    status: completed
+    title: "Build and verify both variants"
+    description: >
+      Build. Run with NUMERIC_THREADS=1 --variant=no_avx_no_threads --update-baseline,
+      then with --variant=with_threads --update-baseline, then with no flags to show
+      multi-variant table.
+    wave: 3
+    agent: gem-devops
+    dependencies: ["multi_variant_infra"]

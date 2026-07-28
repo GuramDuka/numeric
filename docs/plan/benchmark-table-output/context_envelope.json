@@ -1,0 +1,175 @@
+{
+  "context_envelope": {
+    "meta": {
+      "plan_id": "benchmark-table-output",
+      "created_at": "2026-07-28T00:00:00Z",
+      "last_updated": "2026-07-28T00:00:00Z",
+      "version": 1
+    },
+    "tech_stack": [
+      {
+        "name": "C++",
+        "version": "23",
+        "usage_context": "All source in headers; main.cpp includes nn.hpp for numeric library",
+        "config_files": ["CMakeLists.txt"]
+      },
+      {
+        "name": "CMake",
+        "version": "3.14+",
+        "usage_context": "Build system; numeric_demo target from src/main.cpp linked to numeric-lib",
+        "config_files": ["CMakeLists.txt"]
+      },
+      {
+        "name": "g++",
+        "version": "14.3.1",
+        "usage_context": "Primary compiler targeting -std=c++23 with C++23 features (std::print if available)",
+        "config_files": []
+      }
+    ],
+    "conventions": [
+      "All code in headers — only main.cpp and test files are .cpp",
+      "Namespace nn for library code",
+      "MIT license header in every file",
+      "C++17 minimum compat; build targets C++23",
+      "Header-only globals (nn_izero etc.) — single TU only for main.cpp"
+    ],
+    "constraints": {
+      "hard": [
+        "Zero external dependencies — no JSON library, no CLI framework",
+        "Must compile with -std=c++23 on g++ 14.3.1 without new warnings",
+        "Must pass all existing tests (test_integer, test_numeric)",
+        "Default output must remain backward-compatible (original output preserved)",
+        "Windows QueryPerformanceCounter path must compile (guarded by #if _WIN32)"
+      ],
+      "soft": [
+        "Prefer additive changes over invasive rewrites",
+        "Use std::print/println when __has_include(<print>) is true, fallback to cout otherwise",
+        "Hand-written JSON parser may assume flat single-object format (not general-purpose)"
+      ],
+      "compatibility": [
+        "Linux primary target (clock_gettime CLOCK_PROCESS_CPUTIME_ID)",
+        "Windows secondary (QueryPerformanceCounter) — compile-only, not actively tested",
+        "benchmark_baseline.json is runtime data — no source files created"
+      ],
+      "security_requirements": [
+        "CLI flags parsed from argv must not allow injection — simple string comparison only"
+      ]
+    },
+    "architecture_snapshot": {
+      "key_dirs": ["src/", "tests/", "build/"],
+      "patterns": [
+        "Single-main architecture: src/main.cpp is both demo and benchmark",
+        "High-res monotonic clock timing with I/O hole subtraction",
+        "Rational arithmetic via integer numerator/denominator pairs",
+        "π via BBP formula with iterative refinement (pi_cont continuation object)"
+      ],
+      "key_components": [
+        {
+          "name": "numeric_demo (main)",
+          "location": "src/main.cpp",
+          "responsibility": [
+            "Compute sqrt(2), cube_root(2), sin(1), cos(1), π against reference values",
+            "Report correctness (error vs reference) and timing statistics",
+            "(NEW) Per-benchmark individual timing capture",
+            "(NEW) Baseline JSON read/write for historical comparison",
+            "(NEW) Table-formatted output with % change vs baseline",
+            "(NEW) CLI flag handling for --update-baseline and --benchmark-json"
+          ]
+        }
+      ]
+    },
+    "research_digest": {
+      "relevant_files": [
+        {
+          "path": "src/main.cpp",
+          "purpose": ["Primary file to modify — benchmark timing, I/O, CLI, table output"],
+          "confidence": 1.0
+        },
+        {
+          "path": "AGENTS.md",
+          "purpose": ["Project overview, build instructions, known pitfalls"],
+          "confidence": 1.0
+        },
+        {
+          "path": "CMakeLists.txt",
+          "purpose": ["Build config — target_compile_features cxx_std_23, numeric_demo target"],
+          "confidence": 1.0
+        }
+      ],
+      "patterns_found": [
+        {
+          "name": "Conditional std::print via __has_include(<print>)",
+          "category": "portability pattern",
+          "confidence": 1.0,
+          "example_location": ["src/main.cpp:35-42"]
+        },
+        {
+          "name": "Dual-platform timer (Linux clock_gettime / Windows QPC)",
+          "category": "portability pattern",
+          "confidence": 1.0,
+          "example_location": ["src/main.cpp:69-90, 159-175"]
+        },
+        {
+          "name": "I/O hole subtraction for accurate computation timing",
+          "category": "benchmarking methodology",
+          "confidence": 1.0,
+          "example_location": ["src/main.cpp:82, 160-175, 204-220"]
+        }
+      ],
+      "gotchas": [
+        {
+          "text": "Newton fraction blowup: numeric::root(power=2, iter) creates million-bit integers at iter=20. Keep iter <= 12. sqrt(2) uses iter=10 which is safe.",
+          "confidence": 1.0
+        },
+        {
+          "text": "pi computation uses a for(;;) convergence loop that may take many iterations — the entire loop is one benchmark block, not per-iteration timing.",
+          "confidence": 1.0
+        },
+        {
+          "text": "Header-only globals in id.hpp/ii.hpp cause multi-TU linker errors. main.cpp is a single TU — safe.",
+          "confidence": 1.0
+        },
+        {
+          "text": "normalize(3) semantics: bit1=trim trailing zero bits, bit2=GCD reduce. Important for understanding post-computation normalization in timed blocks.",
+          "confidence": 1.0
+        }
+      ]
+    },
+    "prior_decisions": [
+      {
+        "decision": "Flat JSON format {name: nanos} for baseline — no nested structure",
+        "rationale": ["Simplest hand-written parser (no recursion, no nesting)", "Easily extensible later by adding new keys at the same level"],
+        "confidence": 1.0
+      },
+      {
+        "decision": "Table columns show milliseconds (ms) not nanoseconds",
+        "rationale": ["Milliseconds are more readable for human scanning", "Nanos stored internally for precision; converted to ms for display"],
+        "confidence": 1.0
+      },
+      {
+        "decision": "--benchmark-json output goes to stdout after table, not a separate file",
+        "rationale": ["Simplest implementation", "Users can redirect with > to capture JSON separately", "Preserves single-output-stream simplicity"],
+        "confidence": 0.9
+      },
+      {
+        "decision": "Keep aggregate SECS/MILIS/MICROS/NANOS/INDEX output unchanged",
+        "rationale": ["Backward compatibility for any scripts consuming the raw stats", "Table is additive — removes nothing"],
+        "confidence": 1.0
+      }
+    ],
+    "reuse_notes": [
+      {
+        "path": "AGENTS.md",
+        "trust": "high"
+      },
+      {
+        "path": "src/main.cpp",
+        "trust": "high"
+      },
+      {
+        "path": "CMakeLists.txt",
+        "trust": "high"
+      }
+    ]
+  }
+}

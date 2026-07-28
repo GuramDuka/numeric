@@ -27,6 +27,7 @@
 //------------------------------------------------------------------------------
 #include "id.hpp"
 #include "wk.hpp"
+#include <cstdlib>
 //------------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 /// @namespace nn (NaturalNumbers)
@@ -1468,7 +1469,7 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 ///
 /// @details The `pool` object is a globally-accessible `ThreadPoolT`
 ///   instance created with `hardware_concurrency()` worker threads. The
-///   `thread_hardware_concurrency` constant is evaluated once at program
+///   `effective_thread_count()` constant is evaluated once at program
 ///   start and used to decide whether parallel multiplication is
 ///   beneficial: only when the operand word-length >= concurrency count.
 ///
@@ -1477,8 +1478,18 @@ inline std::ostream & operator << (std::ostream & out, const nn::integer & v)
 ///   `join` is needed because `ThreadPoolT`'s destructor waits for
 ///   pending tasks.
 // ---------------------------------------------------------------------------
-static const auto thread_hardware_concurrency = std::thread::hardware_concurrency();
-static ThreadPool pool(thread_hardware_concurrency);
+inline unsigned effective_thread_count() {
+    static unsigned cached = []{
+        const char* env = std::getenv("NUMERIC_THREADS");
+        if (env) {
+            int val = std::atoi(env);
+            return val > 0 ? static_cast<unsigned>(val) : 1u;
+        }
+        return std::thread::hardware_concurrency();
+    }();
+    return cached;
+}
+static ThreadPool pool(effective_thread_count());
 //------------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 /// @brief Performs schoolbook multiplication in parallel using a
@@ -1631,8 +1642,8 @@ inline integer integer::tmul_v(const integer & v) const
 ///   implementation based on operand size.
 ///
 /// @details High-level dispatch:
-///   1. If `thread_hardware_concurrency > 1` and `proxy_->length_ >=
-///      thread_hardware_concurrency`, use threaded multiplication:
+///   1. If `effective_thread_count() > 1` and `proxy_->length_ >=
+///      effective_thread_count()`, use threaded multiplication:
 ///      - `tmul_a<4096>` for operands up to 4096 words
 ///      - `tmul_v` for larger operands (heap-allocated accumulators)
 ///   2. Otherwise, fall back to serial `nn_integer_data::imul` through
@@ -1650,7 +1661,7 @@ inline integer integer::operator * (const integer & v) const
 {
 	stat_imul_++;
 
-	if( thread_hardware_concurrency > 1 && proxy_->length_ >= thread_hardware_concurrency ) {
+	if( effective_thread_count() > 1 && proxy_->length_ >= effective_thread_count() ) {
         if( proxy_->length_ <= 4096 )
             return tmul_a<4096>(v);
 		return tmul_v(v);
