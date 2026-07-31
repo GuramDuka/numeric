@@ -3,3 +3,6 @@ build/
 *.out
 /tmp/
 build-ee93b15/
+
+build_w/
+.cortexkit/

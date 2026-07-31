@@ -9,3 +9,9 @@ add_executable(test_numeric test_numeric.cpp)
 target_link_libraries(test_numeric PRIVATE numeric-lib)
 target_compile_features(test_numeric PRIVATE cxx_std_23)
 add_test(NAME test_numeric COMMAND test_numeric)
+
+# ── id.hpp modernization test ────────────────────────────────────────────────
+add_executable(test_id test_id.cpp)
+target_link_libraries(test_id PRIVATE numeric-lib)
+target_compile_features(test_id PRIVATE cxx_std_23)
+add_test(NAME test_id COMMAND test_id)

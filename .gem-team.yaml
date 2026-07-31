@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════
+# gem-team configuration — opencode-1c-devops-tmpl
+# ═══════════════════════════════════════════════════════════
+# This file defines gem-team orchestrator behavior, planning
+# depth, quality gates, and deployment policies.
+#
+# See https://github.com/mubaidr/gem-team#configuration
+# Full reference: https://mubaidr.github.io/gem-team/configuration/
+# ═══════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════
+# ORCHESTRATOR BEHAVIOR
+# ═══════════════════════════════════════════════════════════
+orchestrator:
+  # Maximum parallel agent executions
+  # Higher = faster, more API usage | 2 is a safe default
+  max_concurrent_agents: 1
+
+  # Force all tasks to this complexity; 'auto' = orchestrator decides
+  # TRIVIAL/LOW — быстрые, меньше шагов (fix, docs, config)
+  # MEDIUM/HIGH — полное планирование, review, critic (рефакторинг, архитектура)
+  default_complexity_threshold: auto
+
+  # Git commit wave output when integration gate passes
+  # true = clean audit trail per wave
+  git_commit_on_gate_pass: true
+
+# ═══════════════════════════════════════════════════════════
+# PLANNING & WORKFLOW
+# ═══════════════════════════════════════════════════════════
+planning:
+  # Run gem-critic (challenge assumptions, edge cases) for these complexities
+  # TRIVIAL | LOW | MEDIUM | HIGH
+  enable_critic_for: [MEDIUM]
+
+# ═══════════════════════════════════════════════════════════
+# QUALITY & VERIFICATION
+# ═══════════════════════════════════════════════════════════
+quality:
+  # Visual regression (screenshot comparison) in browser tests
+  visual_regression_enabled: true
+
+  # Screenshot diff threshold: 0.99=strict, 0.95=balanced, 0.90=lenient
+  visual_diff_threshold: 0.95
+
+  # Accessibility audit depth: none | basic | full
+  a11y_audit_level: basic
+
+# ═══════════════════════════════════════════════════════════
+# DEVOPS & DEPLOYMENT
+# ═══════════════════════════════════════════════════════════
+devops:
+  # Environments requiring explicit approval before deploy
+  approval_required_for: [production]
+
+  # Rollback on deployment failure
+  auto_rollback_on_failure: false
+
+# ═══════════════════════════════════════════════════════════
+# TESTING
+# ═══════════════════════════════════════════════════════════
+testing:
+  # Capture screenshots when browser/UI tests fail
+  screenshot_on_failure: true

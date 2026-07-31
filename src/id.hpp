@@ -143,57 +143,57 @@ static inline constexpr const A & imin(const A & a, const B & b)
 ///   the machine word. This maximizes the use of hardware ALU carry flags.
 // ---------------------------------------------------------------------------
 #if SIZEOF_WORD == 1
-typedef uint8_t word;
-typedef int8_t sword;
-typedef uint16_t dword;
-typedef int16_t sdword;
+using word    = uint8_t;
+using sword   = int8_t;
+using dword   = uint16_t;
+using sdword  = int16_t;
 #elif SIZEOF_WORD == 2
-typedef uint16_t word;
-typedef int16_t sword;
-typedef uint32_t dword;
-typedef int32_t sdword;
+using word    = uint16_t;
+using sword   = int16_t;
+using dword   = uint32_t;
+using sdword  = int32_t;
 #elif SIZEOF_WORD == 4
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
+using word    = uint32_t;
+using sword   = int32_t;
+using dword   = uint64_t;
+using sdword  = int64_t;
 #elif SIZEOF_WORD == 8 && __GNUC__ && __x86_64__
-typedef uint64_t word;
-typedef int64_t sword;
-typedef __uint128_t dword;
-typedef __int128_t sdword;
+using word    = uint64_t;
+using sword   = int64_t;
+using dword   = __uint128_t;
+using sdword  = __int128_t;
 #elif __GNUC__ && __x86_64__
-typedef uint64_t word;
-typedef int64_t sword;
-typedef __uint128_t dword;
-typedef __int128_t sdword;
+using word    = uint64_t;
+using sword   = int64_t;
+using dword   = __uint128_t;
+using sdword  = __int128_t;
 #ifdef SIZEOF_WORD
 #undef SIZEOF_WORD
 #endif
 #define SIZEOF_WORD 8
 #elif _MSC_VER && _M_IX86
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
+using word    = uint32_t;
+using sword   = int32_t;
+using dword   = uint64_t;
+using sdword  = int64_t;
 #ifdef SIZEOF_WORD
 #undef SIZEOF_WORD
 #endif
 #define SIZEOF_WORD 4
 #elif _MSC_VER && _M_X64
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
+using word    = uint32_t;
+using sword   = int32_t;
+using dword   = uint64_t;
+using sdword  = int64_t;
 #ifdef SIZEOF_WORD
 #undef SIZEOF_WORD
 #endif
 #define SIZEOF_WORD 4
 #else
-typedef uint32_t word;
-typedef int32_t sword;
-typedef uint64_t dword;
-typedef int64_t sdword;
+using word    = uint32_t;
+using sword   = int32_t;
+using dword   = uint64_t;
+using sdword  = int64_t;
 #ifdef SIZEOF_WORD
 #undef SIZEOF_WORD
 #endif
@@ -209,9 +209,9 @@ typedef int64_t sdword;
 ///   this for operations that need the widest available accumulator.
 // ---------------------------------------------------------------------------
 #if SIZEOF_WORD < 8
-typedef uintmax_t umaxword_t;
+using umaxword_t = uintmax_t;
 #else
-typedef __uint128_t umaxword_t;
+using umaxword_t = __uint128_t;
 #endif
 //------------------------------------------------------------------------------
 class integer;
@@ -311,7 +311,7 @@ struct nn_integer_data {
 #endif
 
         /// @brief Pointer type for nn_integer_data (convention: nn_integer is a pointer)
-        typedef nn_integer_data * nn_integer;
+        using nn_integer = nn_integer_data *;
 
         // -------------------------------------------------------------------
         /// @brief Increments reference count and returns a non-const this pointer
@@ -1469,8 +1469,8 @@ struct nn_integer_data {
         }
 };
 //------------------------------------------------------------------------------
-/// @brief Public type alias for nn_integer_data pointer
-typedef nn_integer_data::nn_integer nn_integer;
+/// @brief Public type alias for nn_integer_data pointer (C++17 `using` alias)
+using nn_integer = nn_integer_data *;
 //------------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 /// @brief Converts a single hex character to its 4-bit integer value
@@ -1577,7 +1577,7 @@ constexpr T hex_string(const char (&input)[length])
 ///   The magic division by 10 is avoided in favor of portable multiplication.
 // ---------------------------------------------------------------------------
 #if _MSC_VER
-template <typename T> constexpr const T uint_max(const T m = T(1))
+template <typename T> constexpr const T uint_max(const T m = static_cast<T>(1))
 {
     return (m << 3) + (m << 1) > m ? uint_max<T>((m << 3) + (m << 1)) : m;
 }
@@ -1601,7 +1601,7 @@ template <typename T> constexpr const T uint_max()
     T m = 1u;
 
     for( ;; ) {
-        T n = T(m * 10u);
+        T n = static_cast<T>(m * 10u);
         if( n <= m ) // overflow
             break;
         m = n;
@@ -1860,9 +1860,14 @@ inline nn_integer nn_integer_data::isal(uintptr_t bit_count) const
     }
     else {
         // Sub-word shift: iterate right-to-left, reading/writing overlapping
-        // dwords to propagate carry bits across word boundaries.
-        for( uintptr_t i = length_; i-- > 0; dst_w--, src_w-- )
-            *reinterpret_cast<dword *>(dst_w) = (*reinterpret_cast<const dword *>(src_w)) << shift;
+        // dwords via memcpy to propagate carry bits across word boundaries.
+        // This is the safe alternative to union type-punning (strict aliasing).
+        for( uintptr_t i = length_; i-- > 0; dst_w--, src_w-- ) {
+            dword tmp;
+            memcpy(&tmp, src_w, sizeof(dword));
+            tmp <<= shift;
+            memcpy(dst_w, &tmp, sizeof(dword));
+        }
     }
 
     result->data_[result->length_ + 1] = result->data_[result->length_] = isign();
@@ -1916,7 +1921,7 @@ inline nn_integer nn_integer_data::isar(uintptr_t bit_count) const
         return nn_izero.add_ref();
 
     intptr_t new_bit_size = static_cast<intptr_t>(bit_size - bit_count);
-    new_bit_size += -intptr_t(new_bit_size) & (sizeof(word) * CHAR_BIT - 1);
+    new_bit_size += -static_cast<intptr_t>(new_bit_size) & (sizeof(word) * CHAR_BIT - 1);
 
     nn_integer result = nn_new(static_cast<uintptr_t>(new_bit_size) / (sizeof(word) * CHAR_BIT));
 
@@ -1935,9 +1940,14 @@ inline nn_integer nn_integer_data::isar(uintptr_t bit_count) const
     }
     else {
         // Sub-word shift: iterate left-to-right, reading overlapping dwords
-        // to propagate borrowed bits across word boundaries.
-        for( uintptr_t i = result->length_; i-- > 0; dst_w++, src_w++ )
-            *reinterpret_cast<dword *>(dst_w) = *reinterpret_cast<const dword *>(src_w) >> shift;
+        // via memcpy to propagate borrowed bits across word boundaries.
+        // This is the safe alternative to union type-punning (strict aliasing).
+        for( uintptr_t i = result->length_; i-- > 0; dst_w++, src_w++ ) {
+            dword tmp;
+            memcpy(&tmp, src_w, sizeof(dword));
+            tmp >>= shift;
+            memcpy(dst_w, &tmp, sizeof(dword));
+        }
     }
 
     result->dummy_ = 0;
