@@ -632,12 +632,12 @@ int main(int argc, char *argv[])
 
 	for (const auto& r : results) {
 		auto base_it = baseline[baseline_variant].find(r.name);
-		double base_ns = (base_it != baseline[baseline_variant].end()) ? (double)base_it->second : 1.0;
+		double base_ns = (base_it != baseline[baseline_variant].end()) ? static_cast<double>(base_it->second) : 1.0;
 		cout << left << setw(24) << r.name
 			  << right << setw(col_w) << fixed << setprecision(3) << (base_ns / 1e6);
 		for (size_t vi = 1; vi < variants.size(); vi++) {
 			auto vit = baseline[variants[vi]].find(r.name);
-			double v_ns = (vit != baseline[variants[vi]].end()) ? (double)vit->second : 0.0;
+			double v_ns = (vit != baseline[variants[vi]].end()) ? static_cast<double>(vit->second) : 0.0;
 			double delta = (v_ns - base_ns) / base_ns * 100.0;
 			cout << right << setw(col_w) << fixed << setprecision(3) << (v_ns / 1e6)
 				  << right << setw(11) << fixed << setprecision(2) << delta << "%";

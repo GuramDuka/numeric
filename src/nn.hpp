@@ -757,18 +757,14 @@ inline numeric & numeric::normalize(uintptr_t threshold, int how)
 		// fast path
 		uintptr_t i = 0;
 		uintptr_t shift = 0;
-		union {
-			const word * pw;
-			const uint8_t * pb;
-		} p0, p1;
-		p0.pw = numerator_.proxy_->data_;
-		p1.pw = denominator_.proxy_->data_;
+		const word * pw_num = numerator_.proxy_->data_;
+		const word * pw_den = denominator_.proxy_->data_;
 
 		while( i < nl && i < dl ){
-			if( *p0.pw != 0 || *p1.pw != 0 ) break;
+			if( *pw_num != 0 || *pw_den != 0 ) break;
 			shift += sizeof(word) * CHAR_BIT;
-			p0.pw++;
-			p1.pw++;
+			pw_num++;
+			pw_den++;
 			i++;
 		}
 
@@ -776,12 +772,17 @@ inline numeric & numeric::normalize(uintptr_t threshold, int how)
 		nl *= sizeof(word);
 		dl *= sizeof(word);
 
-		while( i < nl && i < dl ){
-			if( *p0.pb != 0 || *p1.pb != 0 ) break;
-			shift += sizeof(uint8_t) * CHAR_BIT;
-			p0.pb++;
-			p1.pb++;
-			i++;
+		{
+			const uint8_t * pb_num = reinterpret_cast<const uint8_t *>(pw_num);
+			const uint8_t * pb_den = reinterpret_cast<const uint8_t *>(pw_den);
+
+			while( i < nl && i < dl ){
+				if( *pb_num != 0 || *pb_den != 0 ) break;
+				shift += sizeof(uint8_t) * CHAR_BIT;
+				pb_num++;
+				pb_den++;
+				i++;
+			}
 		}
 
 		i *= CHAR_BIT;
@@ -806,7 +807,7 @@ inline numeric & numeric::normalize(uintptr_t threshold, int how)
 		  || nl < dl && nl * 1.618 >= dl )*/{
 
 			// упрощаем дробь через наибольший общий делитель
-			integer nod(numerator_.nod_nok(denominator_, NULL));
+			integer nod(numerator_.nod_nok(denominator_, nullptr));
 
 			if( !nod.is_zero() && !nod.is_one() ){
 				numerator_ /= nod;
@@ -864,7 +865,7 @@ inline numeric & numeric::normalize(int how)
 {
 	if( how & 2 ){
 		integer d(numerator_.gcd(denominator_));
-		//integer nod(numerator_.nod_nok(denominator_, NULL));
+		//integer nod(numerator_.nod_nok(denominator_, nullptr));
 
 		if( !d.is_zero() ){
 			numerator_ /= d;

@@ -564,7 +564,7 @@ inline integer::integer(const std::string & s) : integer(0)
 			if( *i == '+' )
 				break;
 
-			if( isdigit(*i) ){
+			if( std::isdigit(static_cast<unsigned char>(*i)) ){
 				*this += m * (*i - '0');
 				m *= integer(10);
 			}
