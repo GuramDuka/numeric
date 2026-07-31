@@ -5,7 +5,7 @@ plan_id: cpp23-modernization
 objective: "Modernize header-only C++ arbitrary-precision arithmetic library (Numeric) from C++17 to C++23: apply C++23 language features, fix code problems (C-casts, union type-punning, NULL→nullptr, typedef→using, div() shadowing), add academic commentary (Knuth refs, complexity notes, algorithm descriptions, pre/post conditions) to every function. Must preserve semantics and pass all existing tests."
 created_at: "2026-07-11T00:00:00Z"
 created_by: "gem-planner"
-status: pending
+status: completed
 tldr: >
   Rewrite 10 files across 6 waves: CMake→C++23, then bottom-up through the
   include DAG (tlsf→id→wk→ii→nn→main/tests), then build_verify. Each source
