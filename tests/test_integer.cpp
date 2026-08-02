@@ -31,6 +31,15 @@ static void test_integer_construct() {
     nn::integer d(std::string("9876543210"));
     TEST("string constructor", d.to_string() == "9876543210");
 
+    // Hex parsing with letters must yield 10-15, not 0-5.
+    // NOTE: value whose top word MSB is set (e.g. 0xFFFFFFFFFFFFFFFF)
+    //    is stored as negative in this sign-magnitude representation;
+    //    the positive 64-bit form requires a leading 0 bit.
+    TEST("hex 0xFF", nn::integer("0xFF").to_string(0, 16) == "FF");
+    TEST("hex 0xA == 10", nn::integer("0xA").to_string() == "10");
+    TEST("hex 0x10B == 267", nn::integer("0x10B").to_string() == "267");
+    TEST("hex 0x0FFFFFFFFFFFFFFFF", nn::integer("0x0FFFFFFFFFFFFFFFF").to_string(0, 16) == "FFFFFFFFFFFFFFFF");
+
     nn::integer e(d);
     TEST("copy constructor", e.to_string() == "9876543210");
 }

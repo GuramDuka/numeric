@@ -61,19 +61,95 @@ struct BenchmarkResult {
 using BaselineVariant = std::map<std::string, uint64_t>;
 using BaselineData = std::map<std::string, BaselineVariant>;
 
+// Minimal JSON parser supporting the nested baseline shape
+// {"variant": {"bench": <uint64_t>, ...}, ...}. Skips insignificant
+// whitespace, string keys, and object/array delimiters; captures bare
+// uint64 values. Throws std::runtime_error on malformed input.
+static std::string json_read_string(const std::string& s, size_t& i) {
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+    if (i >= s.size() || s[i] != '"') return {};
+    std::string out;
+    i++;
+    while (i < s.size() && s[i] != '"') {
+        if (s[i] == '\\' && i + 1 < s.size()) i++;
+        out += s[i++];
+    }
+    if (i < s.size()) i++;
+    return out;
+}
+
+static bool json_skip_value(const std::string& s, size_t& i) {
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+    if (i >= s.size()) return false;
+    if (s[i] == '{' || s[i] == '[') {
+        int depth = 0;
+        do {
+            char c = s[i++];
+            if (c == '{' || c == '[') depth++;
+            else if (c == '}' || c == ']') depth--;
+        } while (i < s.size() && depth > 0);
+        return true;
+    }
+    if (s[i] == '"') {
+        i++;
+        while (i < s.size() && s[i] != '"') { if (s[i] == '\\' && i + 1 < s.size()) i++; i++; }
+        if (i < s.size()) i++;
+        return true;
+    }
+    while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))
+           && s[i] != ',' && s[i] != '}' && s[i] != ']') i++;
+    return true;
+}
+
+static bool json_read_uint(const std::string& s, size_t& i, uint64_t& out) {
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+    size_t start = i;
+    while (i < s.size() && s[i] >= '0' && s[i] <= '9') i++;
+    if (i == start) return false;
+    out = std::stoull(s.substr(start, i - start));
+    return true;
+}
+
 static BaselineData read_baseline(const std::string& path) {
     BaselineData data;
     std::ifstream f(path);
     if (!f.is_open()) return data;
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        std::istringstream iss(line);
-        std::string variant, bench;
-        uint64_t nanos;
-        if (iss >> variant >> bench >> nanos) {
+    std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (s.empty()) return data;
+
+    size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+    if (i >= s.size() || s[i] != '{') throw std::runtime_error("baseline: not a JSON object");
+    i++;
+
+    while (true) {
+        std::string variant = json_read_string(s, i);
+        if (variant.empty() || i >= s.size()) break;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+        if (i < s.size() && s[i] == ':') i++;   // colon
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+        if (i >= s.size() || s[i] != '{') throw std::runtime_error("baseline: expected variant object");
+        i++;                                    // opening brace
+
+        while (true) {
+            std::string bench = json_read_string(s, i);
+            if (bench.empty()) break;
+            while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+            if (i < s.size() && s[i] == ':') i++;
+            uint64_t nanos = 0;
+            if (!json_read_uint(s, i, nanos)) throw std::runtime_error("baseline: bad nanos value");
             data[variant][bench] = nanos;
+            while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+            if (i < s.size() && s[i] == '}') { i++; break; }
+            if (i < s.size() && s[i] == ',') {
+                i++;
+                continue;
+            }
+            break;
         }
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+        if (i < s.size() && s[i] == '}') break;
+        if (i < s.size() && s[i] == ',') { i++; continue; }
     }
     return data;
 }
@@ -81,11 +157,21 @@ static BaselineData read_baseline(const std::string& path) {
 static void write_baseline(const std::string& path, const BaselineData& data) {
     std::ofstream f(path);
     if (!f.is_open()) return;
+    bool first_variant = true;
+    f << "{";
     for (const auto& [variant, benches] : data) {
+        if (!first_variant) f << ",";
+        first_variant = false;
+        f << "\n  \"" << variant << "\": {";
+        bool first_bench = true;
         for (const auto& [bench, nanos] : benches) {
-            f << variant << " " << bench << " " << nanos << "\n";
+            if (!first_bench) f << ",";
+            first_bench = false;
+            f << "\n    \"" << bench << "\": " << nanos;
         }
+        f << "\n  }";
     }
+    f << "\n}\n";
 }
 //------------------------------------------------------------------------------
 // Benchmarking methodology:

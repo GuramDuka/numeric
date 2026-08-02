@@ -531,9 +531,9 @@ inline integer::integer(const std::string & s) : integer(0)
 			if( a >= '0' && a <= '9' )
 				v = a - '0';
 			else if( a >= 'a' && a <= 'f' )
-				v = a - 'a';
+				v = a - 'a' + 10;
 			else if( a >= 'A' && a <= 'F' )
-				v = a - 'A';
+				v = a - 'A' + 10;
 			else
 				throw std::invalid_argument(s);
 
