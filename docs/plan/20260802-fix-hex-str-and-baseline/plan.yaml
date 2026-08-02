@@ -2,7 +2,7 @@ plan_id: 20260802-fix-hex-str-and-baseline
 objective: "Fix 2 defects: (A) integer(string) hex-letter parse missing +10 (ii.hpp:534,536); (B) read_baseline/write_baseline in main.cpp not JSON-aware, breaking 4-column benchmark table."
 created_at: "2026-08-02T00:00:00Z"
 created_by: "orbiter"
-status: active
+status: completed
 complexity: MEDIUM
 tasks:
   - id: debugger_diagnosis
