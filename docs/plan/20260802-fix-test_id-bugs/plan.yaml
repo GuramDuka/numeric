@@ -1,0 +1,19 @@
+plan_id: 20260802-fix-test_id-bugs
+objective: "Fix 4 pre-existing bugs in id.hpp exposed by tests/test_id.cpp: hex_char hex-letter bug, 64-bit shift round-trip, addm/addp mixed-length carry. Must pass all tests."
+created_at: "2026-08-02T00:00:00Z"
+created_by: "orbiter"
+status: completed
+complexity: LOW
+tasks:
+  - id: debugger_diagnosis
+    title: "Root-cause diagnosis of 4 test_id failures"
+    description: "Diagnose: (1) hex_char('A','B') produces 0x50 not 0xAB; (2) integer(0xFFFFFFFFFFFFFFFF)<<32>>32 != 4294967295; (3) integer(100)+integer(1000000000000) != 100000000100; (4) integer(1000000000000)+integer(100) != 100000000100. Locate exact root causes in src/id.hpp (hex utilities, isal/isar shift, addm/addp)."
+    wave: 1
+    agent: gem-debugger
+    dependencies: []
+  - id: implementer_fix
+    title: "Implement fixes for the 4 diagnosed bugs"
+    description: "Apply fixes per debugger_diagnosis output. Must keep all other tests passing and add/adjust test_id expectations to correct values."
+    wave: 2
+    agent: gem-implementer
+    dependencies: ["debugger_diagnosis"]

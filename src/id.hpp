@@ -1490,9 +1490,9 @@ constexpr uint8_t hex_char2int(char input)
 {
     return
     ((input >= 'a') && (input <= 'f'))
-    ? static_cast<uint8_t>(input - 'a')
+    ? static_cast<uint8_t>(input - 'a' + 10)
     : ((input >= 'A') && (input <= 'F'))
-    ? static_cast<uint8_t>(input - 'A')
+    ? static_cast<uint8_t>(input - 'A' + 10)
     : ((input >= '0') && (input <= '9'))
     ? static_cast<uint8_t>(input - '0')
     : throw std::invalid_argument{"hex_char2int: invalid hex character"};

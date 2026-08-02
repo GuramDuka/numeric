@@ -33,17 +33,16 @@ static void test_id_type_alias() {
 
 static void test_hex_utilities() {
     // constexpr hex utilities should work at compile time
-    // NOTE: hex_char2int has a pre-existing bug: letters return (c-'a')
-    // instead of (c-'a'+10). Testing actual behavior, not expected.
+    // constexpr hex utilities should work at compile time
     constexpr uint8_t h1 = nn::hex_char2int('a');
     constexpr uint8_t h2 = nn::hex_char2int('F');
     constexpr uint8_t h3 = nn::hex_char2int('0');
     constexpr uint8_t h4 = nn::hex_char('A', 'B');
 
-    TEST("hex_char2int lowercase a (pre-existing bug)", h1 == 0);
-    TEST("hex_char2int uppercase F (pre-existing bug)", h2 == 5);
+    TEST("hex_char2int lowercase a", h1 == 10);
+    TEST("hex_char2int uppercase F", h2 == 15);
     TEST("hex_char2int zero", h3 == 0);
-    TEST("hex_char pair (pre-existing bug)", h4 == 0x50);
+    TEST("hex_char pair", h4 == 0xAB);
 }
 
 static void test_shift_operations() {
@@ -70,7 +69,7 @@ static void test_bit_cast_type_punning() {
     nn::integer a(0xFFFFFFFFFFFFFFFFull); // max 64-bit
     nn::integer b = a << 32;
     nn::integer c = b >> 32;
-    TEST("64-bit shift left 32 then right 32", c.to_string() == "4294967295");
+    TEST("64-bit shift left 32 then right 32", c.to_string() == "18446744073709551615");
 
     // Test sign extension in right shift
     nn::integer neg_val(-12345);
@@ -98,11 +97,11 @@ static void test_add_sub_dispatch() {
 
     // short + long (addm)
     nn::integer r1 = short_op + long_op;
-    TEST("short + long addm", r1.to_string() == "100000000100");
+    TEST("short + long addm", r1.to_string() == "1000000000100");
 
     // long + short (addp)
     nn::integer r2 = long_op + short_op;
-    TEST("long + short addp", r2.to_string() == "100000000100");
+    TEST("long + short addp", r2.to_string() == "1000000000100");
 
     // same length (addz)
     nn::integer e1(50);
